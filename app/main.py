@@ -5,6 +5,7 @@ import re
 import shutil
 import tempfile
 import time
+import unicodedata
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import List, Optional
@@ -55,10 +56,18 @@ class DownloadFormat(BaseModel):
 
 
 def sanitize_filename(title: str) -> str:
-    """Sanitize the filename to remove invalid characters."""
+    """Sanitize the filename to remove invalid characters and ensure proper encoding."""
+    # Remove invalid filename characters
     title = re.sub(r'[<>:"/\\|?*]', '', title)
+    # Replace multiple spaces with single space
     title = re.sub(r'\s+', ' ', title).strip()
-    return title[:200]
+    # Encode and decode to handle any Unicode characters
+    try:
+        title.encode('ascii')
+        return title[:200]
+    except UnicodeEncodeError:
+        # If we have non-ASCII characters, ensure they're properly handled
+        return unicodedata.normalize('NFKD', title).encode('ascii', 'ignore').decode('ascii')[:200]
 
 
 def format_size(size_in_bytes: Optional[int]) -> str:
