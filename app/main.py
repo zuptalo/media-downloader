@@ -35,12 +35,8 @@ class DownloadRequest(BaseModel):
 
 class Format(BaseModel):
     format_id: str
-    ext: str
-    quality: Optional[str | int | float] = None
-    filesize: Optional[int] = None
-    format_note: Optional[str] = None
-    acodec: Optional[str] = None
-    vcodec: Optional[str] = None
+    display_name: str
+    filesize: Optional[str] = None
 
 
 class MediaInfo(BaseModel):
@@ -48,9 +44,7 @@ class MediaInfo(BaseModel):
     title: str
     formats: List[Format]
     thumbnail: Optional[str]
-    channel: Optional[str] = None
-    upload_date: Optional[str] = None
-    description: Optional[str] = None
+    duration: Optional[int] = None
     is_live: Optional[bool] = False
 
 
@@ -68,6 +62,54 @@ def sanitize_filename(title: str) -> str:
     return title[:200]
 
 
+def format_size(size_in_bytes: Optional[int]) -> str:
+    """Convert bytes to human readable string."""
+    if size_in_bytes is None:
+        return "Size unknown"
+
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_in_bytes < 1024:
+            return f"{size_in_bytes:.1f} {unit}"
+        size_in_bytes /= 1024
+    return f"{size_in_bytes:.1f} GB"
+
+
+def estimate_format_size(formats: List[dict], target_height: Optional[int], audio_only: bool = False) -> Optional[str]:
+    """Estimate size for a given quality target."""
+    if audio_only:
+        # Find best audio format
+        audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
+        if audio_formats:
+            best_audio = max(audio_formats, key=lambda x: x.get('filesize', 0) or 0)
+            return format_size(best_audio.get('filesize'))
+        return None
+
+    if target_height:
+        # Find video format closest to target height, safely handling None heights
+        video_formats = [
+            f for f in formats
+            if f.get('height') is not None
+               and f.get('height') <= target_height
+               and f.get('vcodec') != 'none'
+        ]
+
+        if video_formats:
+            # Get the best quality video within height limit
+            best_video = max(video_formats, key=lambda x: (x.get('height', 0), x.get('filesize', 0) or 0))
+            video_size = best_video.get('filesize', 0) or 0
+
+            # Add audio size
+            audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
+            if audio_formats:
+                best_audio = max(audio_formats, key=lambda x: x.get('filesize', 0) or 0)
+                audio_size = best_audio.get('filesize', 0) or 0
+                total_size = video_size + audio_size
+                return format_size(total_size)
+
+            return format_size(video_size)
+    return None
+
+
 async def get_video_info(url: str) -> MediaInfo:
     ydl_opts = {
         'quiet': True,
@@ -77,30 +119,60 @@ async def get_video_info(url: str) -> MediaInfo:
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
+            is_live = info.get('is_live', False)
+            available_formats = info.get('formats', [])
 
-            formats = [
-                Format(
-                    format_id=str(f['format_id']),
-                    ext=str(f.get('ext', '')),
-                    quality=f.get('quality'),
-                    filesize=f.get('filesize'),
-                    format_note=str(f.get('format_note', '')),
-                    acodec=str(f.get('acodec', '')),
-                    vcodec=str(f.get('vcodec', ''))
-                )
-                for f in info.get('formats', [])
-            ]
+            if is_live:
+                formats = [
+                    Format(
+                        format_id="best",
+                        display_name="Best Quality (Live)",
+                        filesize="Size varies"
+                    ),
+                    Format(
+                        format_id="worst",
+                        display_name="Low Quality (Live)",
+                        filesize="Size varies"
+                    )
+                ]
+            else:
+                formats = []
+                quality_options = [
+                    (2160, "4K Quality (2160p)"),
+                    (1440, "2K Quality (1440p)"),
+                    (1080, "Full HD (1080p)"),
+                    (720, "HD (720p)"),
+                    (480, "SD (480p)")
+                ]
+
+                # Add video quality options that have available formats
+                for height, name in quality_options:
+                    size = estimate_format_size(available_formats, height)
+                    if size and size != "Size unknown":
+                        formats.append(Format(
+                            format_id=f"bv*[height<={height}]+ba/b[height<={height}]",
+                            display_name=name,
+                            filesize=size
+                        ))
+
+                # Always add audio option
+                audio_size = estimate_format_size(available_formats, None, audio_only=True)
+                if audio_size:
+                    formats.append(Format(
+                        format_id="ba/b",
+                        display_name="Audio Only",
+                        filesize=audio_size
+                    ))
 
             return MediaInfo(
                 url=url,
                 title=info.get('title', ''),
                 formats=formats,
                 thumbnail=info.get('thumbnail'),
-                channel=info.get('channel', ''),
-                upload_date=info.get('upload_date', ''),
-                description=info.get('description', ''),
-                is_live=info.get('is_live', False)
+                duration=info.get('duration'),
+                is_live=is_live
             )
+
     except Exception as e:
         logger.error(f"Error extracting info: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error extracting info: {str(e)}")
