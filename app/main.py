@@ -36,7 +36,6 @@ class DownloadRequest(BaseModel):
 class Format(BaseModel):
     format_id: str
     display_name: str
-    filesize: Optional[str] = None
 
 
 class MediaInfo(BaseModel):
@@ -126,13 +125,11 @@ async def get_video_info(url: str) -> MediaInfo:
                 formats = [
                     Format(
                         format_id="best",
-                        display_name="Best Quality (Live)",
-                        filesize="Size varies"
+                        display_name="Best Quality (Live Stream)"
                     ),
                     Format(
                         format_id="worst",
-                        display_name="Low Quality (Live)",
-                        filesize="Size varies"
+                        display_name="Low Quality (Live Stream)"
                     )
                 ]
             else:
@@ -151,8 +148,7 @@ async def get_video_info(url: str) -> MediaInfo:
                     if size and size != "Size unknown":
                         formats.append(Format(
                             format_id=f"bv*[height<={height}]+ba/b[height<={height}]",
-                            display_name=name,
-                            filesize=size
+                            display_name=f"{name} - {size}"
                         ))
 
                 # Always add audio option
@@ -160,9 +156,15 @@ async def get_video_info(url: str) -> MediaInfo:
                 if audio_size:
                     formats.append(Format(
                         format_id="ba/b",
-                        display_name="Audio Only",
-                        filesize=audio_size
+                        display_name=f"Audio Only - {audio_size}"
                     ))
+
+            # Sort formats by quality (highest first)
+            formats = sorted(formats,
+                             key=lambda x: (0 if "Audio" in x.display_name else
+                                            int(x.format_id.split("<=")[1].split("]")[0])
+                                            if "<=" in x.format_id else 999999),
+                             reverse=True)
 
             return MediaInfo(
                 url=url,
