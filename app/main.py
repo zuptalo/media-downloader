@@ -15,13 +15,18 @@ from fastapi.responses import Response
 from pydantic import BaseModel
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
+)
 logger = logging.getLogger(__name__)
 
 # Create a thread pool for handling downloads
-download_executor = ThreadPoolExecutor(max_workers=3)  # Adjust number based on server capacity
+download_executor = ThreadPoolExecutor(max_workers=3)
 
-app = FastAPI(title="Media Download API")
+app = FastAPI(
+    title="Media Download API",
+    debug=os.getenv("DEBUG", "false").lower() == "true"
+)
 
 
 class DownloadRequest(BaseModel):
@@ -107,7 +112,8 @@ async def analyze_urls(request: DownloadRequest):
     return await asyncio.gather(*tasks)
 
 
-def download_file(url: str, format_id: str, embed_thumbnail: bool, duration: Optional[int], temp_dir: str) -> tuple[str, str]:
+def download_file(url: str, format_id: str, embed_thumbnail: bool, duration: Optional[int], temp_dir: str) -> tuple[
+    str, str]:
     """Download file in a separate thread."""
     try:
         # Get video info first to get the title
@@ -226,11 +232,19 @@ async def download_media(download_request: DownloadFormat, background_tasks: Bac
 if __name__ == "__main__":
     import uvicorn
 
+    # Get configuration from environment variables
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8000"))
+    debug = os.getenv("DEBUG", "false").lower() == "true"
+    env = os.getenv("ENVIRONMENT", "development")
+
+    reload_enabled = env == "development"
+
     uvicorn.run(
         "main:app",
-        host="0.0.0.0",
-        port=8000,
-        reload=True,
-        reload_dirs=["app"],
-        log_level="debug"
+        host=host,
+        port=port,
+        reload=reload_enabled,
+        reload_dirs=["app"] if reload_enabled else None,
+        log_level="debug" if debug else "info"
     )

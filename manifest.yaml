@@ -59,6 +59,14 @@ spec:
           env:
             - name: PYTHONUNBUFFERED
               value: "1"
+            - name: DEBUG
+              value: "false"
+            - name: ENVIRONMENT
+              value: "production"
+            - name: PORT
+              value: "8000"
+            - name: HOST
+              value: "0.0.0.0"
           volumeMounts:
             - name: tmp
               mountPath: /tmp
