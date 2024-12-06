@@ -1,4 +1,10 @@
 
+## [0.0.3] - 2024-12-06
+### Changes
+- Merge remote-tracking branch 'origin/main'
+- - Introduced environment variables to start app in production mode - Updated the compose.yaml and manifest.yaml to showcase the changes
+
+
 ## [0.0.2] - 2024-12-06
 ### Changes
 - Merge remote-tracking branch 'origin/main'
