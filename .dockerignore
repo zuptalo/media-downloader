@@ -1,0 +1,13 @@
+.git
+.gitignore
+.env*
+*.pem
+*.key
+*.crt
+__pycache__
+*.pyc
+.pytest_cache
+.coverage
+htmlcov
+.venv
+tests/
