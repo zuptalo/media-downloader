@@ -114,15 +114,66 @@ The API will be available at `http://localhost:8000`
 
 `POST /analyze`
 
-Get detailed information about media URLs including available formats and metadata.
+Get detailed information about media URLs including available formats and metadata. Supports analyzing multiple URLs in
+a single request.
+
+#### Request
 
 ```bash
 curl -X POST http://localhost:8000/analyze \
   -H "Content-Type: application/json" \
   -d '{
-    "urls": ["https://www.youtube.com/watch?v=example"]
+    "urls": [
+      "https://www.youtube.com/watch?v=example1",
+      "https://www.youtube.com/watch?v=example2"
+    ]
   }'
 ```
+
+#### Response
+
+```json
+[
+  {
+    "url": "string",
+    "title": "string",
+    "formats": [
+      {
+        "format_id": "string",
+        "ext": "string",
+        "quality": "string | integer | float | null",
+        "filesize": "integer | null",
+        "format_note": "string | null",
+        "acodec": "string | null",
+        "vcodec": "string | null"
+      }
+    ],
+    "thumbnail": "string | null",
+    "channel": "string | null",
+    "upload_date": "string | null",
+    "description": "string | null",
+    "is_live": "boolean"
+  }
+]
+```
+
+The response is an array of media information objects, one for each URL provided in the request. Each object contains:
+
+- `url`: The original URL requested
+- `title`: Title of the media
+- `formats`: Array of available format options
+    - `format_id`: Unique identifier for the format (used in download requests)
+    - `ext`: File extension
+    - `quality`: Quality indicator (when available)
+    - `filesize`: Size in bytes (when available)
+    - `format_note`: Additional format information
+    - `acodec`: Audio codec
+    - `vcodec`: Video codec
+- `thumbnail`: URL of the media thumbnail
+- `channel`: Channel or uploader name
+- `upload_date`: Date the media was uploaded
+- `description`: Media description
+- `is_live`: Boolean indicating if this is a live stream
 
 ### Download Media
 

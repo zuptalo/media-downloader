@@ -31,7 +31,7 @@ class DownloadRequest(BaseModel):
 class Format(BaseModel):
     format_id: str
     ext: str
-    quality: Optional[str | int] = None
+    quality: Optional[str | int | float] = None
     filesize: Optional[int] = None
     format_note: Optional[str] = None
     acodec: Optional[str] = None
