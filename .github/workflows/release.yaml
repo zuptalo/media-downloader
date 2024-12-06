@@ -1,0 +1,55 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+permissions:
+  contents: write
+  discussions: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Get version from tag
+        id: get_version
+        run: |
+          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
+          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+
+      - name: Get Changelog Entry
+        id: changelog_reader
+        run: |
+          version=$(echo "${GITHUB_REF#refs/tags/}" | sed 's/^v//')
+          # Extract the section for current version
+          awk "/## \[${version}\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > release_notes_section.md
+          
+          {
+            echo "## Docker Images"
+            echo "The following Docker images have been published:"
+            echo ""
+            echo "- \`ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.version }}\`"
+            echo "- \`ghcr.io/${{ github.repository }}:latest\`"
+            echo "- \`zuptalo/media-downloader:${{ steps.get_version.outputs.version }}\`"
+            echo "- \`zuptalo/media-downloader:latest\`"
+            echo ""
+            cat release_notes_section.md
+          } > release_notes.md
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          name: Release ${{ steps.get_version.outputs.version }}
+          body_path: release_notes.md
+          token: ${{ secrets.GITHUB_TOKEN }}
+          draft: false
+          prerelease: false
+          generate_release_notes: true

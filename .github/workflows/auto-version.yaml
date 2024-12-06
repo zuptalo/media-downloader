@@ -1,0 +1,75 @@
+name: Auto Version and Release
+
+on:
+  workflow_run:
+    workflows: [ "Build and Push Docker Image", "Build and Push to Docker Hub" ]
+    types:
+      - completed
+    branches: [ "main" ]
+
+jobs:
+  auto-version:
+    # Only run if Docker builds were successful and we're on main branch
+    if: |
+      github.event.workflow_run.conclusion == 'success' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set Git Config
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Get latest tag
+        id: get_latest_tag
+        run: |
+          # Get latest tag, default to v0.0.0 if none exists
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "LATEST_TAG=$latest_tag" >> $GITHUB_ENV
+          
+          # Extract version numbers
+          version=${latest_tag#v}
+          IFS='.' read -r major minor patch <<< "$version"
+          
+          # Increment patch version
+          new_patch=$((patch + 1))
+          new_version="v$major.$minor.$new_patch"
+          echo "NEW_VERSION=$new_version" >> $GITHUB_ENV
+          echo "Previous version: $latest_tag"
+          echo "New version: $new_version"
+
+      - name: Update CHANGELOG
+        run: |
+          # Get commit messages since last tag
+          changes=$(git log --pretty=format:"- %s" ${{ env.LATEST_TAG }}..HEAD)
+          
+          # Create new version section in CHANGELOG
+            DATE=$(date +%Y-%m-%d)
+            {
+              echo -e "\n## [${NEW_VERSION#v}] - $DATE"
+                                                 echo "### Changes"
+                                                 echo "$changes"
+                                                 echo
+                                                 cat CHANGELOG.md
+            } > CHANGELOG.new
+          mv CHANGELOG.new CHANGELOG.md
+          
+          # Commit CHANGELOG
+          git add CHANGELOG.md
+          git commit -m "docs: update changelog for version ${{ env.NEW_VERSION }}"
+          git push
+
+      - name: Create and push new tag
+        run: |
+          git tag -a ${{ env.NEW_VERSION }} -m "Release ${{ env.NEW_VERSION }}"
+          git push origin ${{ env.NEW_VERSION }}
