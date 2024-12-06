@@ -1,4 +1,9 @@
 
+## [0.0.6] - 2024-12-06
+### Changes
+- - Improved tha file name sanitization logic
+
+
 ## [0.0.5] - 2024-12-06
 ### Changes
 - - Made the API even more suitable for iOS shortcuts use-case
