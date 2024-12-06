@@ -1,4 +1,9 @@
 
+## [0.0.4] - 2024-12-06
+### Changes
+- - Made the API more suitable for iOS shortcuts use-case
+
+
 ## [0.0.3] - 2024-12-06
 ### Changes
 - Merge remote-tracking branch 'origin/main'
