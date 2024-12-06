@@ -1,4 +1,9 @@
 
+## [0.0.5] - 2024-12-06
+### Changes
+- - Made the API even more suitable for iOS shortcuts use-case
+
+
 ## [0.0.4] - 2024-12-06
 ### Changes
 - - Made the API more suitable for iOS shortcuts use-case
