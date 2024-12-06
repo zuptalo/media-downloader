@@ -1,4 +1,10 @@
 
+## [0.0.2] - 2024-12-06
+### Changes
+- Merge remote-tracking branch 'origin/main'
+- - Fixed the quality type in the Format - Updated the README.md
+
+
 ## [0.0.1] - 2024-12-06
 ### Changes
 - Fixing auto-version.yaml so it happens only once after both docker build and pushes
