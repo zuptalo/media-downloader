@@ -51,6 +51,7 @@ jobs:
           new_patch=$((patch + 1))
           new_version="v$major.$minor.$new_patch"
           echo "NEW_VERSION=$new_version" >> $GITHUB_ENV
+          echo "new_version=$new_version" >> $GITHUB_OUTPUT
 
       - name: Install cosign
         uses: sigstore/cosign-installer@v3.3.0
@@ -85,6 +86,7 @@ jobs:
             type=raw,value=latest
 
       - name: Build and push Docker image
+        id: build-and-push
         uses: docker/build-push-action@v5
         with:
           context: .
@@ -94,12 +96,14 @@ jobs:
           platforms: linux/amd64,linux/arm64
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: false
 
-      - name: Sign the published Docker image
+      - name: Sign images
         env:
           COSIGN_EXPERIMENTAL: 1
         run: |
-          echo "${{ steps.meta.outputs.tags }}" | while read -r image; do
+          images=($(echo "${{ steps.meta.outputs.tags }}" | tr '\n' ' '))
+          for image in "${images[@]}"; do
             cosign sign --yes "${image}@${{ steps.build-and-push.outputs.digest }}"
           done
 
