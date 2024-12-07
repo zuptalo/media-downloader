@@ -85,15 +85,14 @@ def format_size(size_in_bytes: Optional[int]) -> str:
 def estimate_format_size(formats: List[dict], target_height: Optional[int], audio_only: bool = False) -> Optional[str]:
     """Estimate size for a given quality target."""
     if audio_only:
-        # Find best audio format
         audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
         if audio_formats:
             best_audio = max(audio_formats, key=lambda x: x.get('filesize', 0) or 0)
-            return format_size(best_audio.get('filesize'))
+            if best_audio.get('filesize'):
+                return format_size(best_audio.get('filesize'))
         return None
 
     if target_height:
-        # Find video format closest to target height, safely handling None heights
         video_formats = [
             f for f in formats
             if f.get('height') is not None
@@ -101,20 +100,29 @@ def estimate_format_size(formats: List[dict], target_height: Optional[int], audi
                and f.get('vcodec') != 'none'
         ]
 
-        if video_formats:
-            # Get the best quality video within height limit
-            best_video = max(video_formats, key=lambda x: (x.get('height', 0), x.get('filesize', 0) or 0))
-            video_size = best_video.get('filesize', 0) or 0
+        if not video_formats:
+            return None
 
-            # Add audio size
-            audio_formats = [f for f in formats if f.get('vcodec') == 'none' and f.get('acodec') != 'none']
-            if audio_formats:
-                best_audio = max(audio_formats, key=lambda x: x.get('filesize', 0) or 0)
-                audio_size = best_audio.get('filesize', 0) or 0
+        best_video = max(video_formats, key=lambda x: (x.get('height', 0), x.get('filesize', 0) or 0))
+        video_size = best_video.get('filesize')
+
+        if not video_size:
+            return "Size unknown"
+
+        audio_formats = [
+            f for f in formats
+            if f.get('vcodec') == 'none'
+               and f.get('acodec') != 'none'
+        ]
+
+        if audio_formats:
+            best_audio = max(audio_formats, key=lambda x: x.get('filesize', 0) or 0)
+            audio_size = best_audio.get('filesize', 0)
+            if audio_size:
                 total_size = video_size + audio_size
                 return format_size(total_size)
 
-            return format_size(video_size)
+        return format_size(video_size)
     return None
 
 
