@@ -1,4 +1,9 @@
 
+## [0.0.8] - 2024-12-07
+### Changes
+
+
+
 ## [0.0.6] - 2024-12-06
 ### Changes
 - - Improved tha file name sanitization logic
