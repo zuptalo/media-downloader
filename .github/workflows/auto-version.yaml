@@ -9,6 +9,7 @@ on:
 
 jobs:
   wait-for-builds:
+    name: Check for Successful Builds
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
     steps:
