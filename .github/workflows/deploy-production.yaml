@@ -15,6 +15,7 @@ env:
 
 jobs:
   deploy:
+    name: Deploy to Production
     runs-on: ubuntu-latest
     if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
@@ -92,7 +93,7 @@ jobs:
             labels:
               app: media-downloader
           spec:
-            replicas: 2
+            replicas: 1
             selector:
               matchLabels:
                 app: media-downloader
@@ -182,6 +183,7 @@ jobs:
               app: media-downloader
             annotations:
               cert-manager.io/cluster-issuer: letsencrypt
+              cert-manager.io/certificate-name: media-downloader-tls
               nginx.ingress.kubernetes.io/enable-cors: "true"
           spec:
             ingressClassName: nginx
