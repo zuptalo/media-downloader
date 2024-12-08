@@ -54,6 +54,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      discussions: write
 
     steps:
       - name: Checkout code
@@ -87,5 +88,18 @@ jobs:
 
       - name: Create and push new tag
         run: |
-          git tag -a ${{ env.NEW_VERSION }} -m "Release ${{ env.NEW_VERSION }}"
-          git push origin ${{ env.NEW_VERSION }}
+          echo "Creating new tag ${{ env.NEW_VERSION }}..."
+          
+          if ! git tag -a ${{ env.NEW_VERSION }} -m "Release ${{ env.NEW_VERSION }}"; then
+            echo "❌ Failed to create tag"
+            exit 1
+          fi
+          
+          echo "Pushing tag to remote..."
+          if ! git push origin ${{ env.NEW_VERSION }}; then
+            echo "❌ Failed to push tag"
+            git tag -d ${{ env.NEW_VERSION }}  # Clean up local tag if push fails
+            exit 1
+          fi
+          
+          echo "✅ Successfully created and pushed tag ${{ env.NEW_VERSION }}"
