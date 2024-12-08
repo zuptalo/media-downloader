@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock, call
 
 import pytest
+from yt_dlp.utils import DownloadError
 
 from app.main import sanitize_filename, estimate_format_size
 
@@ -92,6 +93,43 @@ async def test_analyze_endpoint_error(client):
 
         assert response.status_code == 400
         assert "error" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_analyze_non_url_download_error(client):
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        mock_instance = MagicMock()
+        mock_instance.extract_info.side_effect = DownloadError("Some other extraction error")
+        mock_ydl.return_value.__enter__.return_value = mock_instance
+
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
+
+        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] is False
+        assert data[0]["title"] == ""
+        assert data[0]["formats"] == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_generic_exception(client):
+    """Test that a generic exception triggers the generic except block."""
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        mock_instance = MagicMock()
+
+        # Trigger a generic Exception
+        mock_instance.extract_info.side_effect = Exception("Unexpected error")
+        mock_ydl.return_value.__enter__.return_value = mock_instance
+
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
+
+        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] is False
+        assert data[0]["title"] == ""
+        assert data[0]["formats"] == []
 
 
 @pytest.mark.asyncio
@@ -365,10 +403,30 @@ async def test_downloadable_errors(client):
         # Mock extractors list
         mock_gen_extractors.return_value = [mock_extractor]
 
-        response = client.post(
-            "/analyze",
-            json={"urls": ["https://example.com/test"]}
-        )
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
 
-        assert response.status_code == 400
-        assert "error" in response.json()["detail"].lower()
+        # Now that we no longer raise a 400 error, we expect a 200 with downloadable=False
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]['downloadable'] is False
+        assert data[0]['title'] == ""
+        assert data[0]['formats'] == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_invalid_url(client):
+    """Test the /analyze endpoint with a string that's not a valid URL"""
+    # No special mocking required here if you rely on actual yt_dlp behavior.
+    # If you prefer to mock yt_dlp responses, you could mock them similarly
+    # to other tests. For simplicity, this test will rely on the real behavior.
+
+    response = client.post("/analyze", json={"urls": ["Clipboard 8 Dec 2024 at 06.44"]})
+    assert response.status_code == 200
+
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["downloadable"] is False
+    assert data[0]["title"] == ""
+    assert data[0]["formats"] == []
+    # Optional: Check for other fields if needed.

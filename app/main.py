@@ -147,6 +147,17 @@ async def get_video_info(url: str) -> MediaInfo:
 
     # First check if URL is downloadable
     downloadable = is_url_downloadable(url)
+    if not downloadable:
+        # If not downloadable, return a MediaInfo with downloadable=False
+        return MediaInfo(
+            url=url,
+            title="",
+            formats=[],
+            thumbnail=None,
+            duration=None,
+            is_live=False,
+            downloadable=False
+        )
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
@@ -209,6 +220,24 @@ async def get_video_info(url: str) -> MediaInfo:
                 downloadable=downloadable
             )
 
+    except yt_dlp.utils.DownloadError as e:
+        # If we get here, it might be due to an invalid URL or other extraction error.
+        error_message = str(e)
+        # Check if error message indicates invalid URL
+        if "is not a valid URL" in error_message:
+            return MediaInfo(
+                url=url,
+                title="",
+                formats=[],
+                thumbnail=None,
+                duration=None,
+                is_live=False,
+                downloadable=False
+            )
+        else:
+            # Some other error occurred
+            logger.error(f"Error extracting info: {error_message}")
+            raise HTTPException(status_code=400, detail=f"Error extracting info: {error_message}")
     except Exception as e:
         logger.error(f"Error extracting info: {str(e)}")
         raise HTTPException(status_code=400, detail=f"Error extracting info: {str(e)}")
