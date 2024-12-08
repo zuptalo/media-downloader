@@ -4,6 +4,7 @@ on:
   workflow_run:
     workflows: [ "Auto Version" ]
     types: [ completed ]
+    branches: [ "main" ]
 
 permissions:
   contents: write
@@ -13,6 +14,7 @@ jobs:
   release:
     name: Release
     runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
 
     steps:
       - name: Checkout code
@@ -23,8 +25,13 @@ jobs:
       - name: Get version from tag
         id: get_version
         run: |
-          echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
-          echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
+          git fetch --tags --force
+          latest_tag=$(git describe --tags --abbrev=0)
+          version=${latest_tag#v}
+          echo "VERSION=$version" >> $GITHUB_ENV
+          echo "version=$version" >> $GITHUB_OUTPUT
+          echo "Latest tag: $latest_tag"
+          echo "Version: $version"
 
       - name: Generate Release Notes
         id: generate_notes
@@ -34,14 +41,11 @@ jobs:
           
           # Generate changelog content
           if [ -z "$prev_tag" ]; then
-            # If no previous tag exists, get all commits
             changes=$(git log --pretty=format:"- %s")
           else
-            # Get commits between tags
             changes=$(git log --pretty=format:"- %s" ${prev_tag}..HEAD)
           fi
           
-          # Create release notes content
           {
             echo "## Changes"
             echo "$changes"
@@ -49,18 +53,18 @@ jobs:
             echo "## Docker Images"
             echo "The following Docker images have been published:"
             echo
-            echo "- \`ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.version }}\`"
+            echo "- \`ghcr.io/${{ github.repository }}:v${{ steps.get_version.outputs.version }}\`"
             echo "- \`ghcr.io/${{ github.repository }}:latest\`"
-            echo "- \`zuptalo/media-downloader:${{ steps.get_version.outputs.version }}\`"
+            echo "- \`zuptalo/media-downloader:v${{ steps.get_version.outputs.version }}\`"
             echo "- \`zuptalo/media-downloader:latest\`"
           } > release_notes.md
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          name: Release ${{ steps.get_version.outputs.version }}
+          name: Release v${{ steps.get_version.outputs.version }}
           body_path: release_notes.md
-          token: ${{ secrets.GITHUB_TOKEN }}
+          tag_name: v${{ steps.get_version.outputs.version }}
           draft: false
           prerelease: false
           generate_release_notes: false
