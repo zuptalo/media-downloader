@@ -2,7 +2,7 @@ name: Deploy to Production
 
 on:
   workflow_run:
-    workflows: [ "CI/CD Pipeline" ]
+    workflows: [ "Auto Version" ]
     types:
       - completed
     branches: [ "main" ]
