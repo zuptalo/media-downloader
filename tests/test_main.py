@@ -312,12 +312,12 @@ async def test_download_endpoint_with_exception(client):
         assert response.status_code == 400
         assert "download failed" in response.json()["detail"].lower()
 
+
 @pytest.mark.asyncio
 async def test_url_downloadable_check(client):
     """Test the URL downloadability check"""
     with patch('yt_dlp.YoutubeDL') as mock_ydl, \
             patch('yt_dlp.extractor.gen_extractors') as mock_gen_extractors:
-
         # Mock extractor that considers YouTube URLs suitable
         mock_extractor = MagicMock()
         mock_extractor.suitable.side_effect = lambda url: 'youtube.com' in url
@@ -352,6 +352,7 @@ async def test_url_downloadable_check(client):
         assert response.status_code == 200
         data = response.json()
         assert data[0]["downloadable"] == False
+
 
 @pytest.mark.asyncio
 async def test_downloadable_errors(client):
