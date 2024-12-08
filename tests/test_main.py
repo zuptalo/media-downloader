@@ -365,10 +365,30 @@ async def test_downloadable_errors(client):
         # Mock extractors list
         mock_gen_extractors.return_value = [mock_extractor]
 
-        response = client.post(
-            "/analyze",
-            json={"urls": ["https://example.com/test"]}
-        )
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
 
-        assert response.status_code == 400
-        assert "error" in response.json()["detail"].lower()
+        # Now that we no longer raise a 400 error, we expect a 200 with downloadable=False
+        assert response.status_code == 200
+        data = response.json()
+        assert len(data) == 1
+        assert data[0]['downloadable'] is False
+        assert data[0]['title'] == ""
+        assert data[0]['formats'] == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_invalid_url(client):
+    """Test the /analyze endpoint with a string that's not a valid URL"""
+    # No special mocking required here if you rely on actual yt_dlp behavior.
+    # If you prefer to mock yt_dlp responses, you could mock them similarly
+    # to other tests. For simplicity, this test will rely on the real behavior.
+
+    response = client.post("/analyze", json={"urls": ["Clipboard 8 Dec 2024 at 06.44"]})
+    assert response.status_code == 200
+
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["downloadable"] is False
+    assert data[0]["title"] == ""
+    assert data[0]["formats"] == []
+    # Optional: Check for other fields if needed.
