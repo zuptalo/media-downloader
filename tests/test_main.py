@@ -1,6 +1,7 @@
 from unittest.mock import patch, MagicMock, call
 
 import pytest
+from yt_dlp.utils import DownloadError
 
 from app.main import sanitize_filename, estimate_format_size
 
@@ -92,6 +93,43 @@ async def test_analyze_endpoint_error(client):
 
         assert response.status_code == 400
         assert "error" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_analyze_non_url_download_error(client):
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        mock_instance = MagicMock()
+        mock_instance.extract_info.side_effect = DownloadError("Some other extraction error")
+        mock_ydl.return_value.__enter__.return_value = mock_instance
+
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
+
+        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] is False
+        assert data[0]["title"] == ""
+        assert data[0]["formats"] == []
+
+
+@pytest.mark.asyncio
+async def test_analyze_generic_exception(client):
+    """Test that a generic exception triggers the generic except block."""
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        mock_instance = MagicMock()
+
+        # Trigger a generic Exception
+        mock_instance.extract_info.side_effect = Exception("Unexpected error")
+        mock_ydl.return_value.__enter__.return_value = mock_instance
+
+        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
+
+        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] is False
+        assert data[0]["title"] == ""
+        assert data[0]["formats"] == []
 
 
 @pytest.mark.asyncio
