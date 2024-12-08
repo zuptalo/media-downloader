@@ -182,9 +182,8 @@ jobs:
             labels:
               app: media-downloader
             annotations:
-              cert-manager.io/cluster-issuer: letsencrypt
-              cert-manager.io/certificate-name: media-downloader-tls
-              nginx.ingress.kubernetes.io/enable-cors: "true"
+              cert-manager.io/cluster-issuer: letsencrypt-prod
+              acme.cert-manager.io/http01-edit-in-place: "true"      
           spec:
             ingressClassName: nginx
             tls:
