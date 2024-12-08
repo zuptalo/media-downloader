@@ -13,6 +13,7 @@ env:
 
 jobs:
   test:
+    name: Test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -40,6 +41,7 @@ jobs:
           fail_ci_if_error: true
 
   build-and-push:
+    name: Build and Push
     needs: test
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
@@ -122,30 +124,3 @@ jobs:
           COSIGN_EXPERIMENTAL: 1
         run: |
           cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build-and-push-ghcr.outputs.digest }}"
-
-  create-tag:
-    needs: build-and-push
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Get latest version
-        id: get_version
-        run: |
-          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
-          version=${latest_tag#v}
-          IFS='.' read -r major minor patch <<< "$version"
-          new_patch=$((patch + 1))
-          new_version="v$major.$minor.$new_patch"
-          echo "NEW_VERSION=$new_version" >> $GITHUB_ENV
-
-      - name: Create and push tag
-        run: |
-          git tag ${{ env.NEW_VERSION }}
-          git push origin ${{ env.NEW_VERSION }}

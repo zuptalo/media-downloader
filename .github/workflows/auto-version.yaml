@@ -9,6 +9,7 @@ on:
 
 jobs:
   wait-for-builds:
+    name: Wait for Builds
     runs-on: ubuntu-latest
     if: github.event.workflow_run.conclusion == 'success'
     steps:
@@ -48,6 +49,7 @@ jobs:
             throw new Error('Timeout waiting for Docker Hub build');
 
   auto-version:
+    name: Auto Version
     needs: wait-for-builds
     runs-on: ubuntu-latest
     permissions:
