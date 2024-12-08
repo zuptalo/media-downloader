@@ -26,23 +26,33 @@ jobs:
           echo "VERSION=${GITHUB_REF#refs/tags/v}" >> $GITHUB_ENV
           echo "version=${GITHUB_REF#refs/tags/v}" >> $GITHUB_OUTPUT
 
-      - name: Get Changelog Entry
-        id: changelog_reader
+      - name: Generate Release Notes
+        id: generate_notes
         run: |
-          version=$(echo "${GITHUB_REF#refs/tags/}" | sed 's/^v//')
-          # Extract the section for current version
-          awk "/## \[${version}\]/{flag=1;next}/## \[/{flag=0}flag" CHANGELOG.md > release_notes_section.md
+          # Get the previous tag
+          prev_tag=$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo "")
           
+          # Generate changelog content
+          if [ -z "$prev_tag" ]; then
+            # If no previous tag exists, get all commits
+            changes=$(git log --pretty=format:"- %s")
+          else
+            # Get commits between tags
+            changes=$(git log --pretty=format:"- %s" ${prev_tag}..HEAD)
+          fi
+          
+          # Create release notes content
           {
+            echo "## Changes"
+            echo "$changes"
+            echo
             echo "## Docker Images"
             echo "The following Docker images have been published:"
-            echo ""
+            echo
             echo "- \`ghcr.io/${{ github.repository }}:${{ steps.get_version.outputs.version }}\`"
             echo "- \`ghcr.io/${{ github.repository }}:latest\`"
             echo "- \`zuptalo/media-downloader:${{ steps.get_version.outputs.version }}\`"
             echo "- \`zuptalo/media-downloader:latest\`"
-            echo ""
-            cat release_notes_section.md
           } > release_notes.md
 
       - name: Create Release
@@ -53,4 +63,4 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           draft: false
           prerelease: false
-          generate_release_notes: true
+          generate_release_notes: false
