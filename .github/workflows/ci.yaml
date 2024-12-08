@@ -5,6 +5,10 @@ on:
     branches: [ "main" ]
   pull_request:
     branches: [ "main" ]
+    paths:
+      - '**/*.py'
+      - 'pytest.ini'
+      - 'requirements.txt'
 
 env:
   REGISTRY: ghcr.io
@@ -14,22 +18,8 @@ env:
 jobs:
   test:
     name: Test
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    # Only run tests if Python files or test files have changed
-    if: |
-      github.event_name == 'pull_request' && (
-        contains(github.event.pull_request.base.sha, github.event.pull_request.head.sha) == false &&
-        (
-          contains(github.event.pull_request.files.*.filename, '.py') ||
-          contains(github.event.pull_request.files.*.filename, 'pytest.ini') ||
-          contains(github.event.pull_request.files.*.filename, 'requirements.txt')
-        )
-      ) || (
-        github.event_name == 'push' &&
-        contains(join(join(github.event.commits.*.modified, github.event.commits.*.added), github.event.commits.*.removed), '.py') ||
-        contains(join(join(github.event.commits.*.modified, github.event.commits.*.added), github.event.commits.*.removed), 'pytest.ini') ||
-        contains(join(join(github.event.commits.*.modified, github.event.commits.*.added), github.event.commits.*.removed), 'requirements.txt')
-      )
     steps:
       - uses: actions/checkout@v4
 

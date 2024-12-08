@@ -46,6 +46,7 @@ class MediaInfo(BaseModel):
     thumbnail: Optional[str]
     duration: Optional[int] = None
     is_live: Optional[bool] = False
+    downloadable: bool = True
 
 
 class DownloadFormat(BaseModel):
@@ -132,6 +133,21 @@ async def get_video_info(url: str) -> MediaInfo:
         'no_warnings': True,
     }
 
+    def is_url_downloadable(url: str) -> bool:
+        """Check if the URL is downloadable using yt-dlp."""
+        try:
+            extractors = yt_dlp.extractor.gen_extractors()
+            for e in extractors:
+                if e.suitable(url) and e.IE_NAME != 'generic':
+                    # URL matches a known extractor
+                    return True
+            return False
+        except Exception:
+            return False
+
+    # First check if URL is downloadable
+    downloadable = is_url_downloadable(url)
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -189,7 +205,8 @@ async def get_video_info(url: str) -> MediaInfo:
                 formats=formats,
                 thumbnail=info.get('thumbnail'),
                 duration=info.get('duration'),
-                is_live=is_live
+                is_live=is_live,
+                downloadable=downloadable
             )
 
     except Exception as e:

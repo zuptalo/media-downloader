@@ -25,6 +25,68 @@ integration with iOS Shortcuts or any other client application.
     - Kubernetes deployment configurations
     - Health checks and monitoring
 
+## Directory Structure
+
+To generate this tree structure, use the following command:
+
+```bash
+tree -a -I '__pycache__|*.pyc|.venv|*.iml|.DS_Store|.coverage|.git|.idea|.pytest_cache'
+```
+
+This command will show all files and directories (including hidden ones) while excluding:
+
+- Python cache files (`__pycache__`, `*.pyc`)
+- Virtual environment directory (`.venv`)
+- IntelliJ IDEA module files (`*.iml`)
+- macOS system files (`.DS_Store`)
+- Test coverage data (`.coverage`)
+- Git directory (`.git`)
+- IDE settings (`.idea`)
+- Pytest cache (`.pytest_cache`)
+
+The current project structure:
+
+```
+.
+├── .dockerignore
+├── .github
+│         ├── CODEOWNERS
+│         ├── branch-protection.yaml
+│         ├── dependabot.yaml
+│         └── workflows
+│             ├── auto-version.yaml
+│             ├── ci.yaml
+│             ├── deploy-production.yaml
+│             └── release.yaml
+├── .gitignore
+├── Dockerfile
+├── README.md
+├── app
+│         └── main.py
+├── compose.yaml
+├── pytest.ini
+├── requirements.txt
+└── tests
+    ├── __init__.py
+    ├── conftest.py
+    └── test_main.py
+
+5 directories, 18 files
+```
+
+## Directory Contents
+
+- `.github/workflows/`: Contains GitHub Actions workflow configurations
+- `app/`: Main application directory
+    - `main.py`: Primary application code
+- `tests/`: Test suite directory
+    - `conftest.py`: PyTest configuration and fixtures
+    - `test_main.py`: Test cases for main application
+- `Dockerfile`: Container definition for Docker
+- `compose.yaml`: Docker Compose configuration
+- `pytest.ini`: PyTest settings
+- `requirements.txt`: Python dependencies
+
 ## Prerequisites
 
 ### Development Dependencies
@@ -86,6 +148,11 @@ python-multipart==0.0.7
 3. Run the application:
     ```bash
     python app/main.py
+    ```
+
+4. Run the tests:
+    ```bash
+    pytest tests/ --cov=app --cov-report=xml
     ```
 
 The API will be available at `http://localhost:8000`

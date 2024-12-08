@@ -311,3 +311,64 @@ async def test_download_endpoint_with_exception(client):
 
         assert response.status_code == 400
         assert "download failed" in response.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_url_downloadable_check(client):
+    """Test the URL downloadability check"""
+    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
+            patch('yt_dlp.extractor.gen_extractors') as mock_gen_extractors:
+        # Mock extractor that considers YouTube URLs suitable
+        mock_extractor = MagicMock()
+        mock_extractor.suitable.side_effect = lambda url: 'youtube.com' in url
+        mock_extractor.IE_NAME = 'youtube'
+
+        # Mock extractors list
+        mock_gen_extractors.return_value = [mock_extractor]
+
+        # Configure YoutubeDL mock for successful case
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = {
+            'title': 'Test Video',
+            'formats': [],
+            'is_live': False
+        }
+        mock_ydl.return_value.__enter__.return_value = mock_instance
+
+        # Test downloadable URL (YouTube)
+        response = client.post(
+            "/analyze",
+            json={"urls": ["https://www.youtube.com/watch?v=test"]}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] == True
+
+        # Test non-downloadable URL
+        response = client.post(
+            "/analyze",
+            json={"urls": ["https://example.com/not-a-video"]}
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data[0]["downloadable"] == False
+
+
+@pytest.mark.asyncio
+async def test_downloadable_errors(client):
+    """Test error handling in downloadability check"""
+    with patch('yt_dlp.extractor.gen_extractors') as mock_gen_extractors:
+        # Mock extractor that raises an exception
+        mock_extractor = MagicMock()
+        mock_extractor.suitable.side_effect = Exception("Extractor error")
+
+        # Mock extractors list
+        mock_gen_extractors.return_value = [mock_extractor]
+
+        response = client.post(
+            "/analyze",
+            json={"urls": ["https://example.com/test"]}
+        )
+
+        assert response.status_code == 400
+        assert "error" in response.json()["detail"].lower()
