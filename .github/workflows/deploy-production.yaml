@@ -1,0 +1,293 @@
+name: Deploy to Production
+
+on:
+  workflow_run:
+    workflows: [ "CI/CD Pipeline" ]
+    types:
+      - completed
+    branches: [ "main" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  KUBE_NAMESPACE: media-downloader
+  DOMAIN_NAME: media-downloader.example.com
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Get latest version
+        id: get_version
+        run: |
+          set -e
+          git fetch --tags
+          latest_tag=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "VERSION=${latest_tag#v}" >> $GITHUB_OUTPUT
+
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: 'latest'
+
+      - name: Set up kubeconfig
+        run: |
+          set -e
+          mkdir -p ~/.kube
+          echo "${{ secrets.KUBE_CONFIG }}" > ~/.kube/config
+          chmod 600 ~/.kube/config
+
+      - name: Validate kubectl configuration
+        run: |
+          kubectl cluster-info
+          kubectl get nodes
+
+      - name: Create namespace if not exists
+        run: |
+          set -e
+          if ! kubectl get namespace ${{ env.KUBE_NAMESPACE }} &> /dev/null; then
+            echo "Creating namespace ${{ env.KUBE_NAMESPACE }}..."
+            kubectl create namespace ${{ env.KUBE_NAMESPACE }}
+          else
+            echo "Namespace ${{ env.KUBE_NAMESPACE }} already exists."
+          fi
+          
+          # Label the namespace for easier identification
+          kubectl label namespace ${{ env.KUBE_NAMESPACE }} app=media-downloader --overwrite
+
+      - name: Create ConfigMap for environment variables
+        run: |
+          set -e
+          cat << EOF > env-config.yaml
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: media-downloader-config
+            namespace: ${{ env.KUBE_NAMESPACE }}
+            labels:
+              app: media-downloader
+          data:
+            DEBUG: "false"
+            ENVIRONMENT: "production"
+            PORT: "8000"
+            HOST: "0.0.0.0"
+          EOF
+          kubectl apply -f env-config.yaml
+
+      - name: Generate Kubernetes manifests
+        run: |
+          set -e
+          # Deployment manifest
+          cat << EOF > deployment.yaml
+          apiVersion: apps/v1
+          kind: Deployment
+          metadata:
+            name: media-downloader
+            namespace: ${{ env.KUBE_NAMESPACE }}
+            labels:
+              app: media-downloader
+          spec:
+            replicas: 2
+            selector:
+              matchLabels:
+                app: media-downloader
+            strategy:
+              type: RollingUpdate
+              rollingUpdate:
+                maxSurge: 1
+                maxUnavailable: 0
+            template:
+              metadata:
+                labels:
+                  app: media-downloader
+              spec:
+                containers:
+                  - name: media-downloader
+                    image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:v${{ steps.get_version.outputs.VERSION }}
+                    imagePullPolicy: IfNotPresent
+                    ports:
+                      - containerPort: 8000
+                        name: http
+                    resources:
+                      requests:
+                        cpu: 200m
+                        memory: 256Mi
+                      limits:
+                        cpu: 500m
+                        memory: 512Mi
+                    livenessProbe:
+                      httpGet:
+                        path: /docs
+                        port: http
+                      initialDelaySeconds: 20
+                      periodSeconds: 30
+                      timeoutSeconds: 10
+                      failureThreshold: 3
+                    readinessProbe:
+                      httpGet:
+                        path: /docs
+                        port: http
+                      initialDelaySeconds: 10
+                      periodSeconds: 30
+                      timeoutSeconds: 10
+                      failureThreshold: 3
+                    securityContext:
+                      allowPrivilegeEscalation: false
+                      runAsNonRoot: true
+                      runAsUser: 1000
+                      runAsGroup: 1000
+                      readOnlyRootFilesystem: true
+                    envFrom:
+                      - configMapRef:
+                          name: media-downloader-config
+                    volumeMounts:
+                      - name: tmp
+                        mountPath: /tmp
+                volumes:
+                  - name: tmp
+                    emptyDir: {}
+          EOF
+
+          # Service manifest
+          cat << EOF > service.yaml
+          apiVersion: v1
+          kind: Service
+          metadata:
+            name: media-downloader
+            namespace: ${{ env.KUBE_NAMESPACE }}
+            labels:
+              app: media-downloader
+          spec:
+            selector:
+              app: media-downloader
+            ports:
+              - protocol: TCP
+                port: 80
+                targetPort: 8000
+          EOF
+
+          # Ingress manifest
+          cat << EOF > ingress.yaml
+          apiVersion: networking.k8s.io/v1
+          kind: Ingress
+          metadata:
+            name: media-downloader
+            namespace: ${{ env.KUBE_NAMESPACE }}
+            labels:
+              app: media-downloader
+            annotations:
+              cert-manager.io/cluster-issuer: letsencrypt
+              nginx.ingress.kubernetes.io/enable-cors: "true"
+          spec:
+            ingressClassName: nginx
+            tls:
+              - hosts:
+                  - ${{ secrets.DOMAIN_NAME || env.DOMAIN_NAME }}
+                secretName: media-downloader-tls
+            rules:
+              - host: ${{ secrets.DOMAIN_NAME || env.DOMAIN_NAME }}
+                http:
+                  paths:
+                    - pathType: Prefix
+                      path: /
+                      backend:
+                        service:
+                          name: media-downloader
+                          port:
+                            number: 80
+          EOF
+
+          # HorizontalPodAutoscaler manifest
+          cat << EOF > hpa.yaml
+          apiVersion: autoscaling/v2
+          kind: HorizontalPodAutoscaler
+          metadata:
+            name: media-downloader
+            namespace: ${{ env.KUBE_NAMESPACE }}
+          spec:
+            scaleTargetRef:
+              apiVersion: apps/v1
+              kind: Deployment
+              name: media-downloader
+            minReplicas: 2
+            maxReplicas: 5
+            behavior:
+              scaleDown:
+                stabilizationWindowSeconds: 300
+              scaleUp:
+                stabilizationWindowSeconds: 60
+            metrics:
+              - type: Resource
+                resource:
+                  name: cpu
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+              - type: Resource
+                resource:
+                  name: memory
+                  target:
+                    type: Utilization
+                    averageUtilization: 80
+          EOF
+
+      - name: Deploy to Kubernetes
+        run: |
+          set -e
+          echo "Applying ConfigMap..."
+          kubectl apply -f env-config.yaml
+          
+          echo "Applying Deployment..."
+          kubectl apply -f deployment.yaml
+          
+          echo "Applying Service..."
+          kubectl apply -f service.yaml
+          
+          echo "Applying Ingress..."
+          kubectl apply -f ingress.yaml
+          
+          echo "Applying HorizontalPodAutoscaler..."
+          kubectl apply -f hpa.yaml
+          
+          echo "Waiting for deployment rollout..."
+          kubectl rollout status deployment/media-downloader -n ${{ env.KUBE_NAMESPACE }} --timeout=300s
+
+      - name: Verify deployment
+        run: |
+          set -e
+          echo "Checking deployment status..."
+          READY=$(kubectl get deployment media-downloader -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.status.readyReplicas}')
+          DESIRED=$(kubectl get deployment media-downloader -n ${{ env.KUBE_NAMESPACE }} -o jsonpath='{.spec.replicas}')
+          
+          if [ "$READY" = "$DESIRED" ]; then
+            echo "✅ Deployment successful - $READY/$DESIRED pods ready"
+          else
+            echo "❌ Deployment failed - only $READY/$DESIRED pods ready"
+            echo "Pod status:"
+            kubectl get pods -n ${{ env.KUBE_NAMESPACE }} -l app=media-downloader
+            echo "Deployment details:"
+            kubectl describe deployment media-downloader -n ${{ env.KUBE_NAMESPACE }}
+            exit 1
+          fi
+
+      - name: Verify ingress and certificate status
+        if: success()
+        run: |
+          set -e
+          echo "Checking Ingress status..."
+          kubectl get ingress media-downloader -n ${{ env.KUBE_NAMESPACE }}
+          
+          echo "Checking TLS certificate status..."
+          kubectl get certificate media-downloader-tls -n ${{ env.KUBE_NAMESPACE }}
+          
+          echo "Checking service endpoints..."
+          kubectl get svc -n ${{ env.KUBE_NAMESPACE }} media-downloader
+          kubectl get endpoints media-downloader -n ${{ env.KUBE_NAMESPACE }}
+          
+          echo "Namespace resources summary:"
+          kubectl get all -n ${{ env.KUBE_NAMESPACE }} -l app=media-downloader

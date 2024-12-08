@@ -103,17 +103,55 @@ The API will be available at `http://localhost:8000`
     docker run -p 8000:8000 media-downloader
     ```
 
-### Kubernetes Deployment
+## Required Repository Secrets
 
-1. Update image registry in manifest.yaml:
-    ```yaml
-    image: your-registry/media-downloader:latest
-    ```
+Before deploying, ensure you have set up the following secrets in your GitHub repository:
 
-2. Deploy:
-    ```bash
-    kubectl apply -f manifest.yaml
-    ```
+### Authentication Secrets
+
+- `GITHUB_TOKEN`: Automatically provided by GitHub Actions
+- `DOCKERHUB_USERNAME`: Your Docker Hub username
+- `DOCKERHUB_TOKEN`: Your Docker Hub access token
+- `CODECOV_TOKEN`: Token for CodeCov integration
+
+### Kubernetes Deployment Secrets
+
+- `KUBE_CONFIG`: Your base64-encoded kubeconfig file
+- `DOMAIN_NAME`: The domain name for your deployment (optional, falls back to default in workflow)
+
+To add these secrets:
+
+1. Go to your repository settings
+2. Navigate to Secrets and Variables > Actions
+3. Click "New repository secret"
+4. Add each secret with its corresponding value
+
+## Kubernetes Deployment
+
+The deployment process has been streamlined to generate Kubernetes manifests during the deployment workflow. This
+approach provides:
+
+- Dynamic configuration based on environment variables
+- Automatic version management
+- Simplified maintenance
+
+To deploy:
+
+1. Ensure you have set up all required secrets mentioned above
+
+2. The deployment workflow will automatically:
+    - Generate necessary Kubernetes manifests
+    - Create/update ConfigMaps
+    - Deploy the application with proper configuration
+    - Set up ingress with TLS
+    - Configure autoscaling
+
+3. Monitor the deployment:
+   ```bash
+   kubectl get pods -n media-downloader
+   kubectl get ingress -n media-downloader
+   kubectl get services -n media-downloader
+   ```
 
 ## API Documentation
 
