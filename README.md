@@ -1,7 +1,6 @@
 # Media Download API
 
-[![Tests](https://github.com/zuptalo/media-downloader/actions/workflows/tests.yaml/badge.svg)](https://github.com/zuptalo/media-downloader/actions/workflows/tests.yaml)
-[![Docker Build](https://github.com/zuptalo/media-downloader/actions/workflows/docker-build.yaml/badge.svg)](https://github.com/zuptalo/media-downloader/actions/workflows/docker-build.yaml)
+[![CI/CD Pipeline](https://github.com/zuptalo/media-downloader/actions/workflows/ci.yaml/badge.svg)](https://github.com/zuptalo/media-downloader/actions/workflows/ci.yaml)
 [![Docker Image Version (latest semver)](https://img.shields.io/docker/v/zuptalo/media-downloader?sort=semver&logo=docker)](https://hub.docker.com/r/zuptalo/media-downloader)
 [![Docker Pulls](https://img.shields.io/docker/pulls/zuptalo/media-downloader)](https://hub.docker.com/r/zuptalo/media-downloader)
 [![codecov](https://codecov.io/gh/zuptalo/media-downloader/branch/main/graph/badge.svg)](https://codecov.io/gh/zuptalo/media-downloader)
