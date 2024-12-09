@@ -1018,6 +1018,10 @@ async def download_file(url: str, format_id: str, temp_dir: str,
             safe_title = sanitize_filename(info.get('title', ''))
             is_live = info.get('is_live', False)
 
+        # Set default duration for live streams if not provided
+        if is_live and duration is None:
+            duration = 15
+
         # Configure postprocessors
         postprocessors = [{
             'key': 'FFmpegVideoConvertor',
@@ -1044,7 +1048,7 @@ async def download_file(url: str, format_id: str, temp_dir: str,
             }
         else:
             ydl_opts = {
-                'format': format_id,
+                'format': 'bestvideo[height<=?2160][vcodec!=vp9]+bestaudio/best',
                 'outtmpl': str(Path(temp_dir) / f'{safe_title}.%(ext)s'),
                 'merge_output_format': 'mp4',
                 'postprocessors': postprocessors,
