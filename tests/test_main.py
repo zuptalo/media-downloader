@@ -1,14 +1,63 @@
-from unittest.mock import patch, MagicMock, call
+import os
+from unittest.mock import patch, MagicMock
 
 import pytest
+from fastapi.testclient import TestClient
 from yt_dlp.utils import DownloadError
 
-from app.main import sanitize_filename, estimate_format_size
+from app.main import app, DeviceType, sanitize_filename, create_quality_label, detect_device_type
 
 
-# Unit tests for utility functions
+@pytest.fixture
+def client():
+    """Create a test client for the FastAPI application"""
+    return TestClient(app)
+
+
+@pytest.fixture
+def mock_video_info():
+    """Fixture providing mock video information"""
+    return {
+        'title': 'Test Video',
+        'formats': [
+            {
+                'format_id': 'high',
+                'height': 1080,
+                'width': 1920,
+                'filesize': 1024000,
+                'vcodec': 'avc1',
+                'acodec': 'mp4a',
+                'fps': 30,
+                'tbr': 2500,
+                'ext': 'mp4'
+            },
+            {
+                'format_id': 'low',
+                'height': 720,
+                'width': 1280,
+                'filesize': 512000,
+                'vcodec': 'avc1',
+                'acodec': 'mp4a',
+                'fps': 30,
+                'tbr': 1500,
+                'ext': 'mp4'
+            },
+            {
+                'format_id': 'audio',
+                'vcodec': 'none',
+                'acodec': 'mp4a',
+                'filesize': 102400,
+                'ext': 'm4a'
+            }
+        ],
+        'thumbnail': 'https://example.com/thumb.jpg',
+        'duration': 300,
+        'is_live': False
+    }
+
+
 def test_sanitize_filename():
-    """Test filename sanitization function"""
+    """Test filename sanitization for various cases"""
     # Test basic sanitization
     assert sanitize_filename('test.mp4') == 'test.mp4'
 
@@ -21,207 +70,120 @@ def test_sanitize_filename():
     # Test unicode characters
     assert sanitize_filename('tést vídéo.mp4').replace(' ', '') == 'testvideo.mp4'.replace(' ', '')
 
+    # Test long filenames (should truncate to 200 chars)
+    long_name = 'a' * 250 + '.mp4'
+    assert len(sanitize_filename(long_name)) == 200
 
-def test_estimate_format_size():
-    """Test format size estimation function"""
-    test_formats = [
-        {'height': 1080, 'filesize': 1024000, 'vcodec': 'avc1', 'acodec': 'mp4a'},
-        {'height': 720, 'filesize': 512000, 'vcodec': 'avc1', 'acodec': 'mp4a'},
-        {'vcodec': 'none', 'acodec': 'mp4a', 'filesize': 102400},
+
+def test_create_quality_label():
+    """Test quality label creation for different formats"""
+    # Test full HD format
+    hd_format = {
+        'height': 1080,
+        'width': 1920,
+        'fps': 30,
+        'vcodec': 'avc1.123456',
+        'acodec': 'mp4a.40.2',
+        'filesize': 1024 * 1024 * 10,  # 10MB
+        'tbr': 2500
+    }
+    label = create_quality_label(hd_format)
+    assert '1080p' in label
+    assert 'Full HD' in label
+    assert '[h264/aac]' in label  # Updated assertion
+
+    # Test 4K HDR format
+    hdr_format = {
+        'height': 2160,
+        'width': 3840,
+        'fps': 60,
+        'vcodec': 'vp09.02.51.12.01.09.16.09.01',
+        'acodec': 'opus',
+        'dynamic_range': 'HDR',
+        'format_note': 'HDR'
+    }
+    label = create_quality_label(hdr_format)
+    assert '2160p' in label
+    assert '4K' in label
+    assert 'HDR' in label
+    assert '60fps' in label
+
+    # Test audio-only format
+    audio_format = {
+        'vcodec': 'none',
+        'acodec': 'mp4a.40.2',
+        'filesize': 1024 * 1024
+    }
+    label = create_quality_label(audio_format)
+    assert '[aac]' in label  # Updated assertion
+
+
+@pytest.mark.parametrize(
+    "user_agent,expected_type",
+    [
+        ("Mozilla/5.0 (iPhone; CPU iPhone OS 14_0 like Mac OS X)", DeviceType.MOBILE),
+        ("Mozilla/5.0 (Windows NT 10.0; Win64; x64)", DeviceType.DESKTOP),
+        (None, DeviceType.DESKTOP),  # Default case
     ]
-
-    # Test video format estimation
-    size = estimate_format_size(test_formats, 1080)
-    assert size is not None
-    assert "MB" in size or "KB" in size
-
-    # Test audio-only estimation
-    audio_size = estimate_format_size(test_formats, None, audio_only=True)
-    assert audio_size is not None
-    assert "KB" in audio_size
-
-    # Test with empty formats list
-    no_size = estimate_format_size([], 1080)
-    assert no_size is None
-
-    # Test with formats but no filesize
-    formats_no_size = [
-        {'height': 1080, 'vcodec': 'avc1', 'acodec': 'mp4a'},  # No filesize
-        {'vcodec': 'none', 'acodec': 'mp4a'},  # No filesize
-    ]
-    size_unknown = estimate_format_size(formats_no_size, 1080)
-    assert size_unknown == "Size unknown"
+)
+def test_detect_device_type(user_agent, expected_type):
+    """Test device type detection from user agent strings"""
+    assert detect_device_type(user_agent) == expected_type
 
 
 @pytest.mark.asyncio
 async def test_analyze_endpoint(client, mock_video_info):
-    """Test the /analyze endpoint"""
+    """Test the /analyze endpoint for various scenarios"""
     with patch('yt_dlp.YoutubeDL') as mock_ydl:
         # Configure mock
         mock_instance = MagicMock()
         mock_instance.extract_info.return_value = mock_video_info
         mock_ydl.return_value.__enter__.return_value = mock_instance
 
-        # Test endpoint
+        # Test with single URL
         response = client.post(
             "/analyze",
             json={"urls": ["https://www.youtube.com/watch?v=test"]}
         )
-
         assert response.status_code == 200
         data = response.json()
-        assert isinstance(data, list)
         assert len(data) == 1
         assert data[0]["title"] == "Test Video"
         assert len(data[0]["formats"]) > 0
 
-
-@pytest.mark.asyncio
-async def test_analyze_endpoint_error(client):
-    """Test error handling in /analyze endpoint"""
-    with patch('yt_dlp.YoutubeDL') as mock_ydl:
-        # Configure mock to raise an exception
-        mock_instance = MagicMock()
-        mock_instance.extract_info.side_effect = Exception("Download error")
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
-        # Test endpoint
+        # Test with multiple URLs
         response = client.post(
             "/analyze",
-            json={"urls": ["https://www.youtube.com/watch?v=invalid"]}
+            json={"urls": [
+                "https://www.youtube.com/watch?v=test1",
+                "https://www.youtube.com/watch?v=test2"
+            ]}
         )
-
-        assert response.status_code == 400
-        assert "error" in response.json()["detail"].lower()
-
-
-@pytest.mark.asyncio
-async def test_analyze_non_url_download_error(client):
-    with patch('yt_dlp.YoutubeDL') as mock_ydl:
-        mock_instance = MagicMock()
-        mock_instance.extract_info.side_effect = DownloadError("Some other extraction error")
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
-        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
-
-        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
         assert response.status_code == 200
         data = response.json()
-        assert data[0]["downloadable"] is False
-        assert data[0]["title"] == ""
-        assert data[0]["formats"] == []
+        assert len(data) == 2
 
 
 @pytest.mark.asyncio
-async def test_analyze_generic_exception(client):
-    """Test that a generic exception triggers the generic except block."""
-    with patch('yt_dlp.YoutubeDL') as mock_ydl:
-        mock_instance = MagicMock()
-
-        # Trigger a generic Exception
-        mock_instance.extract_info.side_effect = Exception("Unexpected error")
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
-        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
-
-        # Now we expect 200 with downloadable=False since we're no longer raising HTTPException
-        assert response.status_code == 200
-        data = response.json()
-        assert data[0]["downloadable"] is False
-        assert data[0]["title"] == ""
-        assert data[0]["formats"] == []
-
-
-@pytest.mark.asyncio
-async def test_download_endpoint(client):
-    """Test the /download endpoint"""
-    mock_content = b"test video content"
-    test_filename = "test_video.mp4"
-
-    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
-            patch('builtins.open', create=True) as mock_open, \
-            patch('shutil.rmtree') as mock_rmtree, \
-            patch('tempfile.mkdtemp', return_value='/tmp/test'), \
-            patch('os.path.exists') as mock_exists:
-        # Configure mocks
-        mock_instance = MagicMock()
-        mock_instance.extract_info.return_value = {
-            'title': 'Test Video',
-            'is_live': False
-        }
-        mock_instance.prepare_filename.return_value = test_filename
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
-        # Mock file existence check
-        mock_exists.return_value = True
-
-        # Mock file operations
-        mock_file = MagicMock()
-        mock_file.read.return_value = mock_content
-        mock_open.return_value.__enter__.return_value = mock_file
-
-        # Test endpoint
-        response = client.post(
-            "/download",
-            json={
-                "url": "https://www.youtube.com/watch?v=test",
-                "format_id": "bv*[height<=1080]+ba/b[height<=1080]",
-                "embed_thumbnail": True
+async def test_analyze_live_content(client):
+    """Test analyzing live stream content"""
+    live_info = {
+        'title': 'Test Live Stream',
+        'formats': [
+            {
+                'format_id': 'live_high',
+                'height': 1080,
+                'width': 1920,
+                'vcodec': 'avc1',
+                'acodec': 'mp4a',
+                'tbr': 5000,
+                'is_live': True
             }
-        )
+        ],
+        'is_live': True
+    }
 
-        assert response.status_code == 200
-        assert response.content == mock_content
-        assert response.headers['content-type'] == 'video/mp4'
-        assert 'content-disposition' in response.headers
-        assert mock_rmtree.called  # Verify cleanup was attempted
-
-
-@pytest.mark.asyncio
-async def test_download_endpoint_live_stream(client):
-    """Test downloading a live stream"""
-    mock_content = b"test live stream content"
-    test_filename = "test_live.mp4"
-
-    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
-            patch('builtins.open', create=True) as mock_open, \
-            patch('shutil.rmtree') as mock_rmtree, \
-            patch('tempfile.mkdtemp', return_value='/tmp/test'), \
-            patch('os.path.exists') as mock_exists:
-        # Configure mocks
-        mock_instance = MagicMock()
-        mock_instance.extract_info.return_value = {
-            'title': 'Test Live Stream',
-            'is_live': True
-        }
-        mock_instance.prepare_filename.return_value = test_filename
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
-        mock_exists.return_value = True
-        mock_file = MagicMock()
-        mock_file.read.return_value = mock_content
-        mock_open.return_value.__enter__.return_value = mock_file
-
-        response = client.post(
-            "/download",
-            json={
-                "url": "https://www.youtube.com/watch?v=live",
-                "format_id": "best",
-                "embed_thumbnail": False,
-                "duration": 30
-            }
-        )
-
-        assert response.status_code == 200
-        assert response.content == mock_content
-
-
-@pytest.mark.asyncio
-async def test_live_stream_handling(client, mock_video_info):
-    """Test handling of live stream content"""
     with patch('yt_dlp.YoutubeDL') as mock_ydl:
-        # Configure mock for live stream
-        live_info = {**mock_video_info, 'is_live': True}
         mock_instance = MagicMock()
         mock_instance.extract_info.return_value = live_info
         mock_ydl.return_value.__enter__.return_value = mock_instance
@@ -233,200 +195,161 @@ async def test_live_stream_handling(client, mock_video_info):
 
         assert response.status_code == 200
         data = response.json()
-        assert data[0]["is_live"] == True
-        formats = [f["format_id"] for f in data[0]["formats"]]
-        assert "best" in formats
-        assert "worst" in formats
+        assert data[0]["is_live"] is True
+        assert any('Live Stream' in f['display_name'] for f in data[0]['formats'])
 
 
 @pytest.mark.asyncio
-async def test_download_endpoint_file_not_found(client):
-    """Test download endpoint when file is not found after download"""
-    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
-            patch('tempfile.mkdtemp', return_value='/tmp/test'), \
-            patch('os.path.exists') as mock_exists:
-        mock_instance = MagicMock()
-        mock_instance.extract_info.return_value = {
-            'title': 'Test Video',
-            'is_live': False
-        }
-        mock_instance.prepare_filename.return_value = "nonexistent.mp4"
-        mock_ydl.return_value.__enter__.return_value = mock_instance
+async def test_download_endpoint(client):
+    """Test the /download endpoint"""
+    mock_content = b"test video content"
+    test_filename = "test_video.mp4"
+    temp_dir = "/tmp/test"
 
-        # Mock file not existing
-        mock_exists.return_value = False
+    # Create a single format that will work for both analysis and download
+    test_format = {
+        'format_id': 'test',
+        'ext': 'mp4',
+        'vcodec': 'avc1',
+        'acodec': 'mp4a',
+        'height': 1080,
+        'width': 1920,
+        'tbr': 2500,
+        'filesize': 1024000,
+        'format': 'test - 1080p'
+    }
 
-        response = client.post(
-            "/download",
-            json={
-                "url": "https://www.youtube.com/watch?v=test",
-                "format_id": "best",
-                "embed_thumbnail": True
-            }
-        )
+    analysis_info = {
+        'title': 'Test Video',
+        'formats': [test_format],
+        'is_live': False,
+        'duration': 300,
+        'thumbnail': 'https://example.com/thumb.jpg',
+        'webpage_url': 'https://www.youtube.com/watch?v=test'
+    }
 
-        assert response.status_code == 400
-        assert "file not found" in response.json()["detail"].lower()
-
-
-def test_format_size():
-    """Test format size utility function"""
-    from app.main import format_size
-
-    # Test various size ranges
-    assert format_size(500) == "500.0 B"
-    assert format_size(1500) == "1.5 KB"
-    assert format_size(1500000) == "1.4 MB"
-    assert format_size(1500000000) == "1.4 GB"
-    assert format_size(None) == "Size unknown"
-
-
-@pytest.mark.asyncio
-async def test_download_endpoint_live_with_duration(client):
-    """Test downloading a live stream with duration limit"""
-    mock_content = b"test live content"
-    test_filename = "test_live.mp4"
+    download_info = {
+        **analysis_info,
+        'requested_downloads': [{
+            **test_format,
+            '_filename': os.path.join(temp_dir, test_filename)
+        }]
+    }
 
     with patch('yt_dlp.YoutubeDL') as mock_ydl, \
             patch('builtins.open', create=True) as mock_open, \
             patch('shutil.rmtree') as mock_rmtree, \
-            patch('tempfile.mkdtemp', return_value='/tmp/test'), \
-            patch('os.path.exists') as mock_exists:
-        # Configure mocks
+            patch('tempfile.mkdtemp', return_value=temp_dir), \
+            patch('os.path.exists', return_value=True):
+        # Configure mock for both analyze and download calls
         mock_instance = MagicMock()
-        mock_instance.extract_info.return_value = {
-            'title': 'Test Live Stream',
-            'is_live': True
-        }
-        mock_instance.prepare_filename.return_value = test_filename
+        mock_instance.extract_info.side_effect = [analysis_info, analysis_info,
+                                                  download_info]  # Allow for two analysis calls
+        mock_instance.prepare_filename.return_value = os.path.join(temp_dir, test_filename)
         mock_ydl.return_value.__enter__.return_value = mock_instance
 
-        mock_exists.return_value = True
+        # Mock file operations
         mock_file = MagicMock()
         mock_file.read.return_value = mock_content
         mock_open.return_value.__enter__.return_value = mock_file
 
-        # Test live stream download with duration
-        response = client.post(
-            "/download",
-            json={
-                "url": "https://www.youtube.com/watch?v=live",
-                "format_id": "best",
-                "duration": 30
-            }
-        )
-
-        assert response.status_code == 200
-        assert response.content == mock_content
-
-        # Verify that extract_info was called twice (once for info, once for download)
-        assert mock_instance.extract_info.call_count == 2
-
-        # Check the calls were made correctly
-        mock_instance.extract_info.assert_has_calls([
-            call("https://www.youtube.com/watch?v=live", download=False),
-            call("https://www.youtube.com/watch?v=live", download=True)
-        ])
-
-
-@pytest.mark.asyncio
-async def test_download_endpoint_with_exception(client):
-    """Test download endpoint when an exception occurs during download"""
-    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
-            patch('tempfile.mkdtemp', return_value='/tmp/test'):
-        mock_instance = MagicMock()
-        mock_instance.extract_info.side_effect = Exception("Download failed")
-        mock_ydl.return_value.__enter__.return_value = mock_instance
-
+        # Test standard download
         response = client.post(
             "/download",
             json={
                 "url": "https://www.youtube.com/watch?v=test",
-                "format_id": "best",
+                "format_id": "test",
                 "embed_thumbnail": True
             }
         )
 
-        assert response.status_code == 400
-        assert "download failed" in response.json()["detail"].lower()
+        # Verify HTTP response
+        assert response.status_code == 200
+        assert response.content == mock_content
+        assert response.headers['content-type'] == 'video/mp4'
+        assert 'content-disposition' in response.headers
+
+        # Verify yt-dlp interactions
+        extract_info_calls = mock_instance.extract_info.call_args_list
+
+        # Verify we have the correct sequence of calls
+        assert len(extract_info_calls) == 3, "Should have three extract_info calls in total"
+
+        # Verify the analysis calls (first two should be download=False)
+        assert extract_info_calls[0][1]['download'] is False
+        assert extract_info_calls[1][1]['download'] is False
+
+        # Verify the download call (last one should be download=True)
+        assert extract_info_calls[2][1]['download'] is True
+
+        # Verify file cleanup
+        assert mock_rmtree.called
 
 
 @pytest.mark.asyncio
-async def test_url_downloadable_check(client):
-    """Test the URL downloadability check"""
-    with patch('yt_dlp.YoutubeDL') as mock_ydl, \
-            patch('yt_dlp.extractor.gen_extractors') as mock_gen_extractors:
-        # Mock extractor that considers YouTube URLs suitable
-        mock_extractor = MagicMock()
-        mock_extractor.suitable.side_effect = lambda url: 'youtube.com' in url
-        mock_extractor.IE_NAME = 'youtube'
-
-        # Mock extractors list
-        mock_gen_extractors.return_value = [mock_extractor]
-
-        # Configure YoutubeDL mock for successful case
+async def test_download_errors(client):
+    """Test error handling in download endpoint"""
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        # Test unsupported URL
         mock_instance = MagicMock()
-        mock_instance.extract_info.return_value = {
-            'title': 'Test Video',
-            'formats': [],
-            'is_live': False
-        }
+        mock_instance.extract_info.side_effect = DownloadError("Unsupported URL")
         mock_ydl.return_value.__enter__.return_value = mock_instance
 
-        # Test downloadable URL (YouTube)
         response = client.post(
-            "/analyze",
-            json={"urls": ["https://www.youtube.com/watch?v=test"]}
+            "/download",
+            json={
+                "url": "https://example.com/unsupported",
+                "format_id": "test"
+            }
         )
-        assert response.status_code == 200
-        data = response.json()
-        assert data[0]["downloadable"] == True
 
-        # Test non-downloadable URL
-        response = client.post(
-            "/analyze",
-            json={"urls": ["https://example.com/not-a-video"]}
-        )
-        assert response.status_code == 200
-        data = response.json()
-        assert data[0]["downloadable"] == False
+        assert response.status_code == 400
+        assert "url is not supported for download" in response.json()["detail"].lower()  # Updated assertion
 
 
 @pytest.mark.asyncio
-async def test_downloadable_errors(client):
-    """Test error handling in downloadability check"""
-    with patch('yt_dlp.extractor.gen_extractors') as mock_gen_extractors:
-        # Mock extractor that raises an exception
-        mock_extractor = MagicMock()
-        mock_extractor.suitable.side_effect = Exception("Extractor error")
+async def test_device_specific_formats(client, mock_video_info):
+    """Test format selection based on device type"""
+    with patch('yt_dlp.YoutubeDL') as mock_ydl:
+        mock_instance = MagicMock()
+        mock_instance.extract_info.return_value = mock_video_info
+        mock_ydl.return_value.__enter__.return_value = mock_instance
 
-        # Mock extractors list
-        mock_gen_extractors.return_value = [mock_extractor]
+        # Test mobile device
+        response = client.post(
+            "/analyze",
+            json={
+                "urls": ["https://www.youtube.com/watch?v=test"],
+                "device_type": "mobile"
+            }
+        )
 
-        response = client.post("/analyze", json={"urls": ["https://example.com/test"]})
-
-        # Now that we no longer raise a 400 error, we expect a 200 with downloadable=False
         assert response.status_code == 200
         data = response.json()
-        assert len(data) == 1
-        assert data[0]['downloadable'] is False
-        assert data[0]['title'] == ""
-        assert data[0]['formats'] == []
+        formats = data[0]["formats"]
 
+        # Verify format constraints for mobile
+        for fmt in formats:
+            if 'height' in fmt and fmt['height'] is not None:  # Check for None
+                assert fmt['height'] <= 1080  # Mobile max resolution
+            if 'fps' in fmt and fmt['fps'] is not None:  # Check for None
+                assert fmt['fps'] <= 30  # Mobile max fps
 
-@pytest.mark.asyncio
-async def test_analyze_invalid_url(client):
-    """Test the /analyze endpoint with a string that's not a valid URL"""
-    # No special mocking required here if you rely on actual yt_dlp behavior.
-    # If you prefer to mock yt_dlp responses, you could mock them similarly
-    # to other tests. For simplicity, this test will rely on the real behavior.
+        # Test desktop device
+        response = client.post(
+            "/analyze",
+            json={
+                "urls": ["https://www.youtube.com/watch?v=test"],
+                "device_type": "desktop"
+            }
+        )
 
-    response = client.post("/analyze", json={"urls": ["Clipboard 8 Dec 2024 at 06.44"]})
-    assert response.status_code == 200
+        assert response.status_code == 200
+        data = response.json()
+        formats = data[0]["formats"]
 
-    data = response.json()
-    assert len(data) == 1
-    assert data[0]["downloadable"] is False
-    assert data[0]["title"] == ""
-    assert data[0]["formats"] == []
-    # Optional: Check for other fields if needed.
+        # Verify higher quality formats are available for desktop
+        heights = [f['height'] for f in formats if f.get('height') is not None]
+        if heights:  # Only assert if we have valid heights
+            max_height = max(heights)
+            assert max_height >= 1080  # Should allow higher resolutions

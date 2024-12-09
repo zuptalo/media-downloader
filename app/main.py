@@ -466,40 +466,6 @@ def detect_hdr(fmt: Dict) -> bool:
         return False
 
 
-def create_merged_format(video: Dict, audio: Dict, is_portrait: bool = False) -> Dict:
-    """Create a merged format dictionary with enhanced metadata."""
-    try:
-        video_size = video.get('filesize', 0) or 0
-        audio_size = audio.get('filesize', 0) or 0
-        video_tbr = video.get('tbr', 0) or 0
-        audio_tbr = audio.get('tbr', 0) or 0
-
-        merged_format = {
-            'format_id': f"{video['format_id']}+{audio['format_id']}",
-            'ext': 'mp4',  # Force MP4 output
-            'height': video.get('height'),
-            'width': video.get('width'),
-            'fps': video.get('fps'),
-            'vcodec': video.get('vcodec'),
-            'acodec': audio.get('acodec'),
-            'dynamic_range': video.get('dynamic_range'),
-            'filesize': video_size + audio_size if video_size > 0 else None,
-            'tbr': video_tbr + audio_tbr if video_tbr > 0 else None,
-            'format_note': video.get('format_note'),
-            'quality': video.get('quality')
-        }
-
-        merged_format['display_name'] = create_quality_label(
-            merged_format
-        )
-
-        return merged_format
-
-    except Exception as e:
-        logger.error(f"Error creating merged format: {str(e)}")
-        return create_fallback_format().__dict__
-
-
 def handle_live_formats(formats: List[Dict]) -> List[FormatInfo]:
     """Enhanced live stream format handling with adaptive bitrates."""
     try:
@@ -583,46 +549,6 @@ def handle_live_formats(formats: List[Dict]) -> List[FormatInfo]:
         )]
 
 
-def create_merged_quality_label(fmt: Dict, is_portrait: bool) -> str:
-    """Create a user-friendly quality label for merged formats."""
-    height = fmt.get('height', 0) or 0
-    fps = fmt.get('fps', 0) or 0
-    dynamic_range = fmt.get('dynamic_range', '')
-
-    # Base quality label
-    if is_portrait:
-        quality = f"{height}p Portrait"
-    else:
-        quality = f"{height}p"
-
-    # Add quality indicator
-    if height >= 2160:
-        quality += " (4K)"
-    elif height >= 1440:
-        quality += " (2K)"
-    elif height >= 1080:
-        quality += " (Full HD)"
-    elif height >= 720:
-        quality += " (HD)"
-
-    # Add HDR/FPS info
-    if dynamic_range == 'HDR':
-        quality += " HDR"
-    if fps > 30:
-        quality += f" {int(fps)}fps"
-
-    # Add format type and size
-    quality += " - High Quality (Merged)"
-    if fmt.get('filesize'):
-        quality += f" ({format_size(fmt.get('filesize'))})"
-
-    # Add codec info for tech-savvy users
-    if fmt.get('vcodec') and fmt.get('acodec'):
-        quality += f" [{fmt['vcodec'].split('.')[0]}/{fmt['acodec'].split('.')[0]}]"
-
-    return quality
-
-
 def create_quality_label(fmt: Dict) -> str:
     """Create consistent quality labels across all formats."""
     try:
@@ -692,29 +618,6 @@ def create_quality_label(fmt: Dict) -> str:
     except Exception as e:
         logger.error(f"Error creating quality label: {str(e)}")
         return "Unknown Quality"
-
-
-def create_live_quality_label(fmt: Dict, is_portrait: bool) -> str:
-    """Create a user-friendly quality label for live formats."""
-    height = fmt.get('height', 0)
-    tbr = fmt.get('tbr', 0)
-
-    # Base quality label
-    quality = f"{height}p"
-    if is_portrait:
-        quality += " Portrait"
-
-    # Add quality indicator
-    if height >= 1080:
-        quality += " (Full HD)"
-    elif height >= 720:
-        quality += " (HD)"
-
-    # Add bandwidth requirement
-    if tbr:
-        quality += f" - {tbr / 1000:.1f} Mbps"
-
-    return quality
 
 
 def sanitize_filename(title: str) -> str:
