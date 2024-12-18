@@ -951,7 +951,7 @@ async def download_file(url: str, format_id: str, temp_dir: str,
             }
         else:
             ydl_opts = {
-                'format': 'bestvideo[height<=?2160][vcodec!=vp9]+bestaudio/best',
+                'format': format_id,
                 'outtmpl': str(Path(temp_dir) / f'{safe_title}.%(ext)s'),
                 'merge_output_format': 'mp4',
                 'postprocessors': postprocessors,
