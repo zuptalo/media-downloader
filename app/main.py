@@ -564,13 +564,17 @@ def create_quality_label(fmt: Dict) -> str:
         components = []
 
         # Resolution label
-        if height >= 2160:
+        max_dimension = max(height, fmt.get('width', 0) or 0)
+        min_dimension = min(height, fmt.get('width', 0) or 0)
+        
+        # Use the smaller dimension to determine the quality category
+        if min_dimension >= 2160:
             components.append(f"{height}p (4K)")
-        elif height >= 1440:
+        elif min_dimension >= 1440:
             components.append(f"{height}p (2K)")
-        elif height >= 1080:
+        elif min_dimension >= 1080:
             components.append(f"{height}p (Full HD)")
-        elif height >= 720:
+        elif min_dimension >= 720:
             components.append(f"{height}p (HD)")
         elif height > 0:
             components.append(f"{height}p")
@@ -951,7 +955,7 @@ async def download_file(url: str, format_id: str, temp_dir: str,
             }
         else:
             ydl_opts = {
-                'format': format_id,
+                'format': f'{format_id}+bestaudio[abr<=128]/bestaudio',
                 'outtmpl': str(Path(temp_dir) / f'{safe_title}.%(ext)s'),
                 'merge_output_format': 'mp4',
                 'postprocessors': postprocessors,
