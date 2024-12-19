@@ -18,7 +18,7 @@ from user_agents import parse
 
 # Configure logging
 logging.basicConfig(
-    level=logging.DEBUG if os.getenv("DEBUG", "false").lower() == "true" else logging.INFO
+    level=logging.DEBUG if os.getenv("DEBUG", "true").lower() == "true" else logging.INFO
 )
 logger = logging.getLogger(__name__)
 
@@ -117,28 +117,264 @@ def sort_format_key(fmt: Dict) -> Tuple[int, bool, int, float]:
         fps = fmt.fps if fmt.fps is not None else 0
         size = float('inf') if fmt.filesize is None else fmt.filesize
     else:
-        # For dictionaries
         height = fmt.get('height', 0) if fmt.get('height') is not None else 0
         has_hdr = bool('HDR' in str(fmt.get('dynamic_range', '')) or
                        'HDR' in str(fmt.get('quality', '')))
         fps = fmt.get('fps', 0) if fmt.get('fps') is not None else 0
         size = float('inf') if fmt.get('filesize') is None else fmt.get('filesize', 0)
 
-    # Add codec preference (AV1 > VP9 > H.264)
+    # Modified codec scoring - make H.264 more competitive
     codec_score = 0
     vcodec = str(fmt.get('vcodec', '')).lower()
+
+    # Score based on codec quality but keep H.264 competitive
     if 'av01' in vcodec:
-        codec_score = 3
+        codec_score = 1.2  # Just slightly better than others
     elif 'vp9' in vcodec or 'vp09' in vcodec:
-        codec_score = 2
+        codec_score = 1.1
     elif 'avc1' in vcodec or 'h264' in vcodec:
-        codec_score = 1
+        codec_score = 1.0  # Base score - still very competitive
+
+    # Bonus for having both video and audio
+    has_both = bool(fmt.get('vcodec') != 'none' and fmt.get('acodec') != 'none')
+    if has_both:
+        codec_score += 0.5
 
     # DRC adjustment - penalize DRC versions slightly
     is_drc = '-drc' in str(fmt.get('format_id', ''))
     drc_penalty = 0.1 if is_drc else 0
 
     return (-height, not has_hdr, -fps, float(-codec_score + drc_penalty))
+
+
+def create_quality_label(fmt: Dict | FormatInfo) -> str:
+    """Create a unified quality label for both Dict and FormatInfo formats."""
+    try:
+        # Handle both Dict and FormatInfo inputs
+        if isinstance(fmt, FormatInfo):
+            height = fmt.height or 0
+            width = fmt.width or 0
+            fps = fmt.fps or 0
+            vcodec = fmt.vcodec
+            acodec = fmt.acodec
+            filesize = fmt.filesize
+            is_portrait = getattr(fmt, 'is_portrait', False)
+        else:
+            height = fmt.get('height', 0) or 0
+            width = fmt.get('width', 0) or 0
+            fps = fmt.get('fps', 0) or 0
+            vcodec = fmt.get('vcodec')
+            acodec = fmt.get('acodec')
+            filesize = fmt.get('filesize')
+            is_portrait = bool(width < height) if width and height else False
+
+        components = []
+
+        # Resolution and quality label
+        if height >= 1080:
+            components.append(f"{height}p (Full HD)")
+        elif height >= 720:
+            components.append(f"{height}p (HD)")
+        else:
+            components.append(f"{height}p")
+
+        # Portrait indicator
+        if is_portrait:
+            components.append("Portrait")
+
+        # Frame rate (if higher than 30)
+        if fps > 30:
+            components.append(f"{int(fps)}fps")
+
+        # File size
+        if filesize:
+            size = filesize / (1024 * 1024)  # Convert to MB
+            if size >= 1:
+                components.append(f"({size:.1f} MB)")
+            else:
+                size_kb = filesize / 1024
+                components.append(f"({size_kb:.1f} KB)")
+
+        # Format type indicators
+        has_video = bool(vcodec and vcodec != 'none')
+        has_audio = bool(acodec and acodec != 'none')
+
+        if has_video and not has_audio:
+            components.append("- Video Only")
+
+        if has_video:
+            if 'avc1' in str(vcodec).lower() or 'h264' in str(vcodec).lower():
+                components.append("[h264]")
+            elif 'av01' in str(vcodec).lower():
+                components.append("[av1]")
+
+        if has_audio and not has_video:
+            components.append("- Audio Only")
+            if 'opus' in str(acodec).lower():
+                components.append("[opus]")
+            else:
+                components.append("[aac]")
+
+        return " ".join(components)
+
+    except Exception as e:
+        logger.error(f"Error creating quality label: {str(e)}")
+        return "Unknown Quality"
+
+
+def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[FormatInfo]:
+    """Enhanced format consolidation with better format grouping and display."""
+    if is_live:
+        return handle_live_formats(formats)
+
+    if not formats:
+        return [create_fallback_format()]
+
+    # Resolution mapping
+    RESOLUTION_MAP = {
+        256: 240,
+        426: 360,
+        640: 360,
+        854: 480,
+        1280: 720,
+        1920: 1080
+    }
+
+    try:
+        # Separate formats by type
+        combined_formats = []
+        video_only_formats = []
+        audio_formats = []
+
+        for fmt in formats:
+            try:
+                if not fmt or fmt.get('ext') == 'mhtml':
+                    continue
+
+                raw_height = fmt.get('height', 0) or 0
+                height = RESOLUTION_MAP.get(raw_height, raw_height)
+                has_video = bool(fmt.get('vcodec') and fmt.get('vcodec') != 'none')
+                has_audio = bool(fmt.get('acodec') and fmt.get('acodec') != 'none')
+                vcodec = str(fmt.get('vcodec', '')).lower()
+
+                # Skip VP9 formats
+                if 'vp9' in vcodec or 'vp09' in vcodec:
+                    continue
+
+                # Skip formats without filesize unless necessary
+                if not fmt.get('filesize') and 'storyboard' not in fmt.get('format_note', '').lower():
+                    continue
+
+                width = fmt.get('width', 0) or 0
+                is_portrait = width < height if width and height else False
+                fps = fmt.get('fps', 30) or 30
+
+                # Enhanced codec detection
+                if 'avc1' in vcodec or 'h264' in vcodec:
+                    codec_family = 'h264'
+                elif 'av01' in vcodec:
+                    codec_family = 'av1'
+                else:
+                    continue
+
+                # Categorize format
+                if has_video and has_audio:
+                    combined_formats.append((height, fps, codec_family, is_portrait, fmt))
+                elif has_video and height >= 144:
+                    video_only_formats.append((height, fps, codec_family, is_portrait, fmt))
+                elif has_audio and not has_video:
+                    audio_formats.append(fmt)
+
+            except Exception as e:
+                logger.error(f"Error processing format: {str(e)}")
+                continue
+
+        final_formats = []
+
+        # Process combined formats first (h264 priority)
+        h264_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c == 'h264']
+        other_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c != 'h264']
+
+        # Sort by height (desc), fps (desc)
+        for height, fps, codec, is_portrait, fmt in sorted(h264_combined + other_combined,
+                                                           key=lambda x: (-x[0], -x[1])):
+            format_info = format_to_info({
+                'format_id': fmt['format_id'],
+                'ext': fmt.get('ext', 'mp4'),
+                'quality': create_quality_label({
+                    'height': height,
+                    'width': fmt.get('width'),
+                    'fps': fps,
+                    'filesize': fmt.get('filesize'),
+                    'vcodec': fmt.get('vcodec'),
+                    'acodec': fmt.get('acodec'),
+                    'is_portrait': is_portrait
+                }),
+                'filesize': fmt.get('filesize'),
+                'vcodec': fmt.get('vcodec'),
+                'acodec': fmt.get('acodec'),
+                'width': fmt.get('width'),
+                'height': height,
+                'fps': fps,
+                'tbr': fmt.get('tbr')
+            })
+            final_formats.append(format_info)
+
+        # Process video-only formats
+        h264_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'h264']
+        av1_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'av1']
+
+        for height, fps, codec, is_portrait, fmt in sorted(h264_video + av1_video,
+                                                           key=lambda x: (-x[0], -x[1])):
+            format_info = format_to_info({
+                'format_id': fmt['format_id'],
+                'ext': fmt.get('ext', 'mp4'),
+                'quality': create_quality_label({
+                    'height': height,
+                    'width': fmt.get('width'),
+                    'fps': fps,
+                    'filesize': fmt.get('filesize'),
+                    'vcodec': fmt.get('vcodec'),
+                    'acodec': None,
+                    'is_portrait': is_portrait
+                }),
+                'filesize': fmt.get('filesize'),
+                'vcodec': fmt.get('vcodec'),
+                'acodec': None,
+                'width': fmt.get('width'),
+                'height': height,
+                'fps': fps,
+                'tbr': fmt.get('tbr')
+            })
+            final_formats.append(format_info)
+
+        # Process audio formats (limit to 128k)
+        audio_formats.sort(key=lambda x: -(x.get('abr', 0) or x.get('tbr', 0) or 0))
+        for fmt in audio_formats:
+            if (fmt.get('abr', 0) or fmt.get('tbr', 0) or 0) <= 128:
+                format_info = format_to_info({
+                    'format_id': fmt['format_id'],
+                    'ext': 'mp3',  # Will be converted to MP3
+                    'quality': f"Audio {fmt.get('abr', fmt.get('tbr', 0))}k",
+                    'filesize': fmt.get('filesize'),
+                    'vcodec': None,
+                    'acodec': fmt.get('acodec'),
+                    'width': None,
+                    'height': None,
+                    'fps': None,
+                    'tbr': fmt.get('tbr')
+                })
+                final_formats.append(format_info)
+
+        # Set recommended format
+        if final_formats:
+            final_formats[0].is_recommended = True
+
+        return final_formats
+
+    except Exception as e:
+        logger.error(f"Error in format consolidation: {str(e)}")
+        return [create_fallback_format()]
 
 
 def format_to_info(fmt: dict) -> FormatInfo:
@@ -148,19 +384,13 @@ def format_to_info(fmt: dict) -> FormatInfo:
         if not fmt:
             return create_fallback_format()
 
-        # Set display name based on format type
-        if not fmt.get('display_name'):
-            if fmt.get('vcodec') == 'none':
-                fmt['display_name'] = 'Audio Only'
-            else:
-                fmt['display_name'] = fmt.get('format_note', '') or 'Unknown Format'
+        # Create display name and quality using unified function
+        display_name = create_quality_label(fmt)
+        fmt['display_name'] = display_name
 
-        # Ensure quality string exists
+        # Set quality string if not present
         if not fmt.get('quality'):
-            if fmt.get('height'):
-                fmt['quality'] = f"{fmt['height']}p"
-            else:
-                fmt['quality'] = fmt.get('format_note', '') or fmt.get('display_name', '')
+            fmt['quality'] = display_name
 
         # Create FormatInfo with proper field handling
         format_info = FormatInfo(
@@ -179,77 +409,11 @@ def format_to_info(fmt: dict) -> FormatInfo:
             display_name=fmt.get('display_name', '')
         )
 
-        # Ensure display_name is never empty
-        if not format_info.display_name:
-            format_info.display_name = create_quality_label_from_info(format_info)
-
-        # Ensure quality is never empty
-        if not format_info.quality:
-            format_info.quality = format_info.display_name
-
         return format_info
 
     except Exception as e:
         logger.error(f"Error converting format {fmt.get('format_id')}: {str(e)}")
         return create_fallback_format()
-
-
-def create_quality_label_from_info(format_info: FormatInfo) -> str:
-    """Create quality label from FormatInfo object."""
-    try:
-        # Base quality components
-        components = []
-
-        # Resolution
-        if format_info.height:
-            is_portrait = (format_info.width or 0) < (format_info.height or 0)
-            if is_portrait:
-                components.append(f"{format_info.height}p Portrait")
-            else:
-                components.append(f"{format_info.height}p")
-
-            # Add quality indicator
-            if format_info.height >= 2160:
-                components.append("(4K)")
-            elif format_info.height >= 1440:
-                components.append("(2K)")
-            elif format_info.height >= 1080:
-                components.append("(Full HD)")
-            elif format_info.height >= 720:
-                components.append("(HD)")
-
-        # HDR
-        if 'HDR' in format_info.quality:
-            components.append("HDR")
-
-        # Frame rate
-        if format_info.fps and format_info.fps > 30:
-            components.append(f"{int(format_info.fps)}fps")
-
-        # Format type and codec info
-        if format_info.vcodec and format_info.acodec:
-            components.append("- Ready to Play")
-            components.append(f"[{format_info.vcodec.split('.')[0]}/{format_info.acodec.split('.')[0]}]")
-        elif format_info.vcodec:
-            components.append("- Video Only")
-            components.append(f"[{format_info.vcodec.split('.')[0]}]")
-        elif format_info.acodec:
-            components.append("- Audio Only")
-            components.append(f"[{format_info.acodec.split('.')[0]}]")
-
-        # Size
-        if format_info.filesize:
-            components.append(f"({format_size(format_info.filesize)})")
-
-        # Bitrate for live streams
-        if format_info.tbr:
-            components.append(f"({format_info.tbr / 1000:.1f} Mbps)")
-
-        return " ".join(components)
-
-    except Exception as e:
-        logger.error(f"Error creating quality label from info: {str(e)}")
-        return "Unknown Quality"
 
 
 def create_fallback_format() -> FormatInfo:
@@ -270,120 +434,6 @@ def create_fallback_format() -> FormatInfo:
     )
 
 
-def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[FormatInfo]:
-    """Enhanced format consolidation with better error handling."""
-    if is_live:
-        return handle_live_formats(formats)
-
-    if not formats:
-        return [create_fallback_format()]
-
-    try:
-        # Initialize containers for different format types
-        video_formats = []  # Video-only formats
-        audio_formats = []  # Audio-only formats
-
-        # Process all formats
-        for fmt in formats:
-            try:
-                if not fmt or fmt.get('ext') == 'mhtml':
-                    continue
-
-                # Get basic format info with null safety
-                height = fmt.get('height', 0) or 0
-                has_video = bool(fmt.get('vcodec') and fmt.get('vcodec') != 'none')
-                has_audio = bool(fmt.get('acodec') and fmt.get('acodec') != 'none')
-                is_drc = '-drc' in str(fmt.get('format_id', ''))
-
-                # Skip formats without any useful information
-                if not has_video and not has_audio:
-                    continue
-
-                # Skip DRC audio formats if we have non-DRC version
-                if not has_video and is_drc:
-                    continue
-
-                # Add HDR flag
-                fmt['is_hdr'] = detect_hdr(fmt)
-
-                # Process format based on type
-                if has_video:
-                    # Only include reasonable resolutions
-                    if height >= 144:
-                        video_formats.append(fmt)
-                elif has_audio:
-                    audio_formats.append(fmt)
-
-            except Exception as e:
-                logger.error(f"Error processing format {fmt.get('format_id')}: {str(e)}")
-                continue
-
-        # Sort formats by quality
-        video_formats.sort(key=sort_format_key)
-
-        # Group formats by resolution for potential merging
-        res_groups = {}
-        for fmt in video_formats:
-            height = fmt.get('height', 0) or 0
-            if height not in res_groups:
-                res_groups[height] = []
-            res_groups[height].append(fmt)
-
-        # Select best formats for each resolution
-        final_formats = []
-        seen_heights = set()
-
-        # Process resolutions in descending order
-        for height in sorted(res_groups.keys(), reverse=True):
-            formats_at_res = res_groups[height]
-
-            # Skip duplicate heights
-            if height in seen_heights:
-                continue
-            seen_heights.add(height)
-
-            # Get best format at this resolution
-            best_format = formats_at_res[0]
-
-            # Create format info
-            format_info = format_to_info({
-                'format_id': best_format['format_id'],
-                'ext': best_format.get('ext', 'mp4'),
-                'quality': determine_quality_label(best_format),
-                'filesize': best_format.get('filesize'),
-                'vcodec': best_format.get('vcodec'),
-                'acodec': best_format.get('acodec'),
-                'width': best_format.get('width'),
-                'height': height,
-                'fps': best_format.get('fps'),
-                'tbr': best_format.get('tbr'),
-                'display_name': create_quality_label(best_format),
-                'error': None
-            })
-
-            final_formats.append(format_info)
-
-        # Add audio formats (one per codec type)
-        seen_codecs = set()
-        for fmt in audio_formats:
-            codec = fmt.get('acodec', '')
-            codec_type = get_codec_type(codec)
-
-            if codec_type not in seen_codecs:
-                seen_codecs.add(codec_type)
-                final_formats.append(format_to_info(fmt))
-
-        # Set recommended format
-        if final_formats:
-            final_formats[0].is_recommended = True
-
-        return final_formats
-
-    except Exception as e:
-        logger.error(f"Error in format consolidation: {str(e)}")
-        return [create_fallback_format()]
-
-
 def get_codec_type(codec: str) -> str:
     """Determine codec type from codec string."""
     codec = str(codec).lower()
@@ -394,46 +444,6 @@ def get_codec_type(codec: str) -> str:
     elif 'vorbis' in codec:
         return 'vorbis'
     return 'other'
-
-
-def determine_quality_label(fmt: Dict) -> str:
-    """Create a quality label based on format properties."""
-    try:
-        if not fmt:
-            return "Unknown Quality"
-
-        height = fmt.get('height', 0) or 0
-        fps = fmt.get('fps') or 0  # Use 0 as fallback for fps
-        is_hdr = bool(fmt.get('is_hdr'))
-
-        components = []
-
-        # Resolution
-        if height >= 2160:
-            components.append("4K")
-        elif height >= 1440:
-            components.append("2K")
-        elif height >= 1080:
-            components.append("Full HD")
-        elif height >= 720:
-            components.append("HD")
-
-        # Add actual height
-        components.append(f"{height}p")
-
-        # HDR
-        if is_hdr:
-            components.append("HDR")
-
-        # High frame rate
-        if fps > 30:
-            components.append(f"{int(fps)}fps")
-
-        return " ".join(components)
-
-    except Exception as e:
-        logger.error(f"Error determining quality label: {str(e)}")
-        return "Unknown Quality"
 
 
 def detect_hdr(fmt: Dict) -> bool:
@@ -498,7 +508,15 @@ def handle_live_formats(formats: List[Dict]) -> List[FormatInfo]:
                     fmt = format_to_info({
                         'format_id': f'live-{quality.lower()}',
                         'ext': 'mp4',
-                        'quality': f'{quality} Quality Stream',
+                        'quality': create_quality_label({
+                            'height': closest.get('height'),
+                            'width': closest.get('width'),
+                            'fps': closest.get('fps'),
+                            'vcodec': closest.get('vcodec'),
+                            'acodec': closest.get('acodec'),
+                            'tbr': closest.get('tbr'),
+                            'is_live': True
+                        }),
                         'filesize': None,
                         'vcodec': closest.get('vcodec'),
                         'acodec': closest.get('acodec'),
@@ -547,77 +565,6 @@ def handle_live_formats(formats: List[Dict]) -> List[FormatInfo]:
             is_recommended=True,
             error=str(e)
         )]
-
-
-def create_quality_label(fmt: Dict) -> str:
-    """Create consistent quality labels across all formats."""
-    try:
-        # Get basic format info with null safety
-        height = fmt.get('height', 0) or 0
-        fps = fmt.get('fps') or 0
-        is_hdr = detect_hdr(fmt)
-        is_portrait = bool(fmt.get('width', 0) < height)
-        tbr = fmt.get('tbr', 0) or 0
-        filesize = fmt.get('filesize')
-
-        # Build quality label components
-        components = []
-
-        # Resolution label
-        if height >= 2160:
-            components.append(f"{height}p (4K)")
-        elif height >= 1440:
-            components.append(f"{height}p (2K)")
-        elif height >= 1080:
-            components.append(f"{height}p (Full HD)")
-        elif height >= 720:
-            components.append(f"{height}p (HD)")
-        elif height > 0:
-            components.append(f"{height}p")
-
-        # Orientation
-        if is_portrait:
-            components.append("Portrait")
-
-        # Special features
-        if is_hdr:
-            components.append("HDR")
-        if fps > 30:
-            components.append(f"{int(fps)}fps")
-
-        # Format type
-        if fmt.get('is_live'):
-            if tbr:
-                components.append(f"({tbr / 1000:.1f} Mbps)")
-        else:
-            if filesize:
-                components.append(f"({format_size(filesize)})")
-
-        # Codec info
-        codecs = []
-        if fmt.get('vcodec') and fmt.get('vcodec') != 'none':
-            codec = fmt['vcodec'].split('.')[0]
-            if 'av01' in codec:
-                codecs.append('av1')
-            elif 'vp09' in codec:
-                codecs.append('vp9')
-            elif 'avc1' in codec:
-                codecs.append('h264')
-            else:
-                codecs.append(codec)
-
-        if fmt.get('acodec') and fmt.get('acodec') != 'none':
-            codec = fmt['acodec'].split('.')[0]
-            codecs.append('opus' if 'opus' in codec else 'aac' if 'mp4a' in codec else codec)
-
-        if codecs:
-            components.append(f"[{'/'.join(codecs)}]")
-
-        return " ".join(components)
-
-    except Exception as e:
-        logger.error(f"Error creating quality label: {str(e)}")
-        return "Unknown Quality"
 
 
 def sanitize_filename(title: str) -> str:
@@ -913,19 +860,71 @@ def create_empty_response(url: str) -> MediaAnalysis:
 
 async def download_file(url: str, format_id: str, temp_dir: str,
                         embed_thumbnail: bool = True, duration: Optional[int] = None) -> Tuple[str, str]:
-    """Download file in a separate thread."""
+    """Download file in a separate thread with automatic format handling."""
     try:
-        # Get video info first to get the title
+        # Get video info first to get the title and check format
         with yt_dlp.YoutubeDL({'quiet': True}) as ydl:
             info = ydl.extract_info(url, download=False)
             safe_title = sanitize_filename(info.get('title', ''))
             is_live = info.get('is_live', False)
+            formats = info.get('formats', [])
 
         # Set default duration for live streams if not provided
         if is_live and duration is None:
             duration = 15
 
-        # Configure postprocessors
+        # Find selected format
+        selected_format = next((f for f in formats if f.get('format_id') == format_id), None)
+        if selected_format:
+            has_video = selected_format.get('vcodec') and selected_format.get('vcodec') != 'none'
+            has_audio = selected_format.get('acodec') and selected_format.get('acodec') != 'none'
+
+            # If video-only, find best audio <= 128k
+            if has_video and not has_audio:
+                audio_formats = [f for f in formats
+                                 if f.get('acodec') and f.get('acodec') != 'none'
+                                 and not (f.get('vcodec') and f.get('vcodec') != 'none')
+                                 and ((f.get('abr', 0) or 0) <= 128
+                                      or (f.get('tbr', 0) or 0) <= 128)]
+
+                if audio_formats:
+                    # Sort by quality and prefer certain codecs
+                    best_audio = max(audio_formats,
+                                     key=lambda x: (3 if 'opus' in str(x.get('acodec', '')).lower()
+                                                    else 2 if 'aac' in str(x.get('acodec', '')).lower()
+                                     else 1,
+                                                    x.get('abr', 0) or x.get('tbr', 0) or 0))
+                    format_id = f"{format_id}+{best_audio['format_id']}"
+
+            # If audio-only, set up for MP3 conversion
+            elif not has_video and has_audio:
+                postprocessors = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '128',
+                }]
+
+                if embed_thumbnail and info.get('thumbnail'):
+                    postprocessors.append({
+                        'key': 'EmbedThumbnail',
+                        'already_have_thumbnail': False,
+                    })
+
+                ydl_opts = {
+                    'format': format_id,
+                    'outtmpl': str(Path(temp_dir) / f'{safe_title}.%(ext)s'),
+                    'postprocessors': postprocessors,
+                    'writethumbnail': embed_thumbnail,
+                }
+
+                with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                    logger.info(f"Starting audio download for format {format_id}")
+                    download_info = ydl.extract_info(url, download=True)
+                    filename = ydl.prepare_filename(download_info)
+                    mp3_filename = str(Path(filename).with_suffix('.mp3'))
+                    return mp3_filename, f"{safe_title}.mp3"
+
+        # Configure postprocessors for video
         postprocessors = [{
             'key': 'FFmpegVideoConvertor',
             'preferedformat': 'mp4',
