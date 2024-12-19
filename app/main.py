@@ -230,7 +230,7 @@ def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[Form
     if not formats:
         return [create_fallback_format()]
 
-    # Resolution mapping
+    # Resolution mapping (keep existing mapping)
     RESOLUTION_MAP = {
         256: 240,
         426: 360,
@@ -241,6 +241,9 @@ def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[Form
     }
 
     try:
+        # Detect if this is Instagram content
+        is_instagram = any('dash-' in str(fmt.get('format_id', '')) for fmt in formats)
+
         # Separate formats by type
         combined_formats = []
         video_only_formats = []
@@ -257,33 +260,40 @@ def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[Form
                 has_audio = bool(fmt.get('acodec') and fmt.get('acodec') != 'none')
                 vcodec = str(fmt.get('vcodec', '')).lower()
 
-                # Skip VP9 formats
-                if 'vp9' in vcodec or 'vp09' in vcodec:
+                # Skip VP9 formats only for non-Instagram content
+                if not is_instagram and ('vp9' in vcodec or 'vp09' in vcodec):
                     continue
 
-                # Skip formats without filesize unless necessary
-                if not fmt.get('filesize') and 'storyboard' not in fmt.get('format_note', '').lower():
+                # Skip formats without filesize unless necessary or Instagram
+                if not is_instagram and not fmt.get('filesize') and 'storyboard' not in fmt.get('format_note',
+                                                                                                '').lower():
                     continue
 
                 width = fmt.get('width', 0) or 0
                 is_portrait = width < height if width and height else False
                 fps = fmt.get('fps', 30) or 30
 
-                # Enhanced codec detection
-                if 'avc1' in vcodec or 'h264' in vcodec:
-                    codec_family = 'h264'
-                elif 'av01' in vcodec:
-                    codec_family = 'av1'
+                # For Instagram, we'll keep all formats and handle them differently
+                if is_instagram:
+                    if has_video and not has_audio and height > 0:
+                        video_only_formats.append((height, fps, 'vp9', is_portrait, fmt))
+                    elif has_audio and not has_video:
+                        audio_formats.append(fmt)
                 else:
-                    continue
+                    # Original codec detection logic for non-Instagram
+                    if 'avc1' in vcodec or 'h264' in vcodec:
+                        codec_family = 'h264'
+                    elif 'av01' in vcodec:
+                        codec_family = 'av1'
+                    else:
+                        continue
 
-                # Categorize format
-                if has_video and has_audio:
-                    combined_formats.append((height, fps, codec_family, is_portrait, fmt))
-                elif has_video and height >= 144:
-                    video_only_formats.append((height, fps, codec_family, is_portrait, fmt))
-                elif has_audio and not has_video:
-                    audio_formats.append(fmt)
+                    if has_video and has_audio:
+                        combined_formats.append((height, fps, codec_family, is_portrait, fmt))
+                    elif has_video and height >= 144:
+                        video_only_formats.append((height, fps, codec_family, is_portrait, fmt))
+                    elif has_audio and not has_video:
+                        audio_formats.append(fmt)
 
             except Exception as e:
                 logger.error(f"Error processing format: {str(e)}")
@@ -291,80 +301,114 @@ def consolidate_formats(formats: List[Dict], is_live: bool = False) -> List[Form
 
         final_formats = []
 
-        # Process combined formats first (h264 priority)
-        h264_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c == 'h264']
-        other_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c != 'h264']
+        if is_instagram:
+            # Get best audio format for Instagram
+            best_audio = max(audio_formats, key=lambda x: x.get('tbr', 0) or 0) if audio_formats else None
 
-        # Sort by height (desc), fps (desc)
-        for height, fps, codec, is_portrait, fmt in sorted(h264_combined + other_combined,
-                                                           key=lambda x: (-x[0], -x[1])):
-            format_info = format_to_info({
-                'format_id': fmt['format_id'],
-                'ext': fmt.get('ext', 'mp4'),
-                'quality': create_quality_label({
-                    'height': height,
-                    'width': fmt.get('width'),
-                    'fps': fps,
-                    'filesize': fmt.get('filesize'),
-                    'vcodec': fmt.get('vcodec'),
-                    'acodec': fmt.get('acodec'),
-                    'is_portrait': is_portrait
-                }),
-                'filesize': fmt.get('filesize'),
-                'vcodec': fmt.get('vcodec'),
-                'acodec': fmt.get('acodec'),
-                'width': fmt.get('width'),
-                'height': height,
-                'fps': fps,
-                'tbr': fmt.get('tbr')
-            })
-            final_formats.append(format_info)
+            # Group by resolution and pick best format for each
+            resolution_groups = {}
+            for height, fps, _, is_portrait, fmt in video_only_formats:
+                if height not in resolution_groups:
+                    resolution_groups[height] = []
+                resolution_groups[height].append((fps, fmt))
 
-        # Process video-only formats
-        h264_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'h264']
-        av1_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'av1']
+            # Create quality options for each unique resolution
+            for height in sorted(resolution_groups.keys(), reverse=True):
+                formats_for_res = resolution_groups[height]
+                # Sort by bitrate (prefer lower for better compatibility)
+                best_format = min(formats_for_res, key=lambda x: x[1].get('tbr', float('inf')) or float('inf'))[1]
 
-        for height, fps, codec, is_portrait, fmt in sorted(h264_video + av1_video,
-                                                           key=lambda x: (-x[0], -x[1])):
-            format_info = format_to_info({
-                'format_id': fmt['format_id'],
-                'ext': fmt.get('ext', 'mp4'),
-                'quality': create_quality_label({
-                    'height': height,
-                    'width': fmt.get('width'),
-                    'fps': fps,
-                    'filesize': fmt.get('filesize'),
-                    'vcodec': fmt.get('vcodec'),
-                    'acodec': None,
-                    'is_portrait': is_portrait
-                }),
-                'filesize': fmt.get('filesize'),
-                'vcodec': fmt.get('vcodec'),
-                'acodec': None,
-                'width': fmt.get('width'),
-                'height': height,
-                'fps': fps,
-                'tbr': fmt.get('tbr')
-            })
-            final_formats.append(format_info)
+                if best_audio:
+                    format_info = format_to_info({
+                        'format_id': f"{best_format['format_id']}+{best_audio['format_id']}",
+                        'ext': 'mp4',
+                        'quality': f"{height}p ({'Full HD' if height >= 1080 else 'HD' if height >= 720 else 'SD'})",
+                        'filesize': None,  # Instagram doesn't provide size
+                        'vcodec': best_format.get('vcodec'),
+                        'acodec': best_audio.get('acodec'),
+                        'width': best_format.get('width'),
+                        'height': height,
+                        'fps': best_format.get('fps'),
+                        'tbr': (best_format.get('tbr', 0) or 0) + (best_audio.get('tbr', 0) or 0)
+                    })
+                    final_formats.append(format_info)
 
-        # Process audio formats (limit to 128k)
-        audio_formats.sort(key=lambda x: -(x.get('abr', 0) or x.get('tbr', 0) or 0))
-        for fmt in audio_formats:
-            if (fmt.get('abr', 0) or fmt.get('tbr', 0) or 0) <= 128:
+        else:
+            # Original non-Instagram format processing
+            # Process combined formats first (h264 priority)
+            h264_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c == 'h264']
+            other_combined = [(h, f, c, p, fmt) for h, f, c, p, fmt in combined_formats if c != 'h264']
+
+            # Sort by height (desc), fps (desc)
+            for height, fps, codec, is_portrait, fmt in sorted(h264_combined + other_combined,
+                                                               key=lambda x: (-x[0], -x[1])):
                 format_info = format_to_info({
                     'format_id': fmt['format_id'],
-                    'ext': 'mp3',  # Will be converted to MP3
-                    'quality': f"Audio {fmt.get('abr', fmt.get('tbr', 0))}k",
+                    'ext': fmt.get('ext', 'mp4'),
+                    'quality': create_quality_label({
+                        'height': height,
+                        'width': fmt.get('width'),
+                        'fps': fps,
+                        'filesize': fmt.get('filesize'),
+                        'vcodec': fmt.get('vcodec'),
+                        'acodec': fmt.get('acodec'),
+                        'is_portrait': is_portrait
+                    }),
                     'filesize': fmt.get('filesize'),
-                    'vcodec': None,
+                    'vcodec': fmt.get('vcodec'),
                     'acodec': fmt.get('acodec'),
-                    'width': None,
-                    'height': None,
-                    'fps': None,
+                    'width': fmt.get('width'),
+                    'height': height,
+                    'fps': fps,
                     'tbr': fmt.get('tbr')
                 })
                 final_formats.append(format_info)
+
+            # Process video-only formats
+            h264_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'h264']
+            av1_video = [(h, f, c, p, fmt) for h, f, c, p, fmt in video_only_formats if c == 'av1']
+
+            for height, fps, codec, is_portrait, fmt in sorted(h264_video + av1_video,
+                                                               key=lambda x: (-x[0], -x[1])):
+                format_info = format_to_info({
+                    'format_id': fmt['format_id'],
+                    'ext': fmt.get('ext', 'mp4'),
+                    'quality': create_quality_label({
+                        'height': height,
+                        'width': fmt.get('width'),
+                        'fps': fps,
+                        'filesize': fmt.get('filesize'),
+                        'vcodec': fmt.get('vcodec'),
+                        'acodec': None,
+                        'is_portrait': is_portrait
+                    }),
+                    'filesize': fmt.get('filesize'),
+                    'vcodec': fmt.get('vcodec'),
+                    'acodec': None,
+                    'width': fmt.get('width'),
+                    'height': height,
+                    'fps': fps,
+                    'tbr': fmt.get('tbr')
+                })
+                final_formats.append(format_info)
+
+            # Process audio formats (limit to 128k)
+            audio_formats.sort(key=lambda x: -(x.get('abr', 0) or x.get('tbr', 0) or 0))
+            for fmt in audio_formats:
+                if (fmt.get('abr', 0) or fmt.get('tbr', 0) or 0) <= 128:
+                    format_info = format_to_info({
+                        'format_id': fmt['format_id'],
+                        'ext': 'mp3',  # Will be converted to MP3
+                        'quality': f"Audio {fmt.get('abr', fmt.get('tbr', 0))}k",
+                        'filesize': fmt.get('filesize'),
+                        'vcodec': None,
+                        'acodec': fmt.get('acodec'),
+                        'width': None,
+                        'height': None,
+                        'fps': None,
+                        'tbr': fmt.get('tbr')
+                    })
+                    final_formats.append(format_info)
 
         # Set recommended format
         if final_formats:
